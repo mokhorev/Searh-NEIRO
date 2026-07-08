@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -10,7 +11,14 @@ from rich.console import Console
 from rich.table import Table
 
 from .config import DEFAULT_CONFIG, filter_provider_configs, load_config
-from .manual import MANUAL_PROVIDERS, read_manual_answers, write_manual_template
+from .manual import (
+    MANUAL_PROVIDERS,
+    read_batch_manual_answers,
+    read_manual_answers,
+    write_batch_manual_template,
+    write_companies_example,
+    write_manual_template,
+)
 from .openserp import openserp_search
 from .prompts import DEFAULT_SYSTEM, load_prompts
 from .providers import build_provider, is_configured
@@ -18,6 +26,13 @@ from .reports import write_all_reports
 
 app = typer.Typer(help="Searh-NEIRO: probe multiple AI systems and audit brand visibility.")
 console = Console()
+
+
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^\w\-а-яё]+", "_", value, flags=re.IGNORECASE)
+    value = re.sub(r"_+", "_", value).strip("_")
+    return value or "company"
 
 
 @app.command("providers")
@@ -143,6 +158,55 @@ def manual_import(
     console.print(f"[bold green]Imported manual answers:[/bold green] {len(results)}")
     for path in paths:
         console.print(f"- {path}")
+
+
+@app.command("companies-example")
+def companies_example(
+    output: Annotated[str, typer.Option("--output", "-o", help="Example companies CSV path")] = "inputs/companies.csv",
+) -> None:
+    """Create an example companies.csv for batch work."""
+    path = write_companies_example(output)
+    console.print(f"[bold green]Example companies file written:[/bold green] {path}")
+
+
+@app.command("batch-manual-template")
+def batch_manual_template(
+    companies: Annotated[str, typer.Option("--companies", help="CSV with brand,industry,region,competitors")],
+    prompts_file: Annotated[str, typer.Option("--prompts", help="Prompt template file with {brand}, {industry}, {region}")],
+    providers: Annotated[str, typer.Option("--providers", "-p", help="Comma-separated manual web providers")] = "",
+    output: Annotated[str, typer.Option("--output", "-o", help="CSV file to create")] = "outputs/batch_manual_prompts.csv",
+) -> None:
+    """Create one CSV task list for many companies and many prompts."""
+    prompt_templates = load_prompts(prompts_file, brand="{brand}", industry="{industry}", region="{region}")
+    provider_list = [item.strip() for item in providers.split(",") if item.strip()] or MANUAL_PROVIDERS
+    path = write_batch_manual_template(
+        companies_path=companies,
+        prompt_templates=prompt_templates,
+        output_path=output,
+        providers=provider_list,
+    )
+    console.print(f"[bold green]Batch manual template written:[/bold green] {path}")
+    console.print("Fill the answer column, then run batch-manual-import.")
+
+
+@app.command("batch-manual-import")
+def batch_manual_import(
+    input_file: Annotated[str, typer.Option("--input", "-i", help="Filled batch manual CSV")],
+    output: Annotated[str, typer.Option("--output", "-o", help="Output directory")] = "outputs/batch_report",
+) -> None:
+    """Import a filled batch CSV and create one report directory per company."""
+    grouped = read_batch_manual_answers(input_file)
+    out = Path(output)
+    out.mkdir(parents=True, exist_ok=True)
+    console.print(f"[bold]Companies with answers:[/bold] {len(grouped)}")
+    for brand, data in grouped.items():
+        competitors = [item.strip() for item in str(data.get("competitors", "")).split(",") if item.strip()]
+        results = data["results"]  # type: ignore[index]
+        company_dir = out / slugify(brand)
+        paths = write_all_reports(results, company_dir, brand=brand, competitors=competitors)  # type: ignore[arg-type]
+        console.print(f"[green]Report for {brand}[/green]")
+        for path in paths:
+            console.print(f"- {path}")
 
 
 @app.command("search")
