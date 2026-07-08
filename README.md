@@ -13,7 +13,8 @@
 - определяет примерную позицию бренда в ответе;
 - ищет упоминания конкурентов;
 - сохраняет отчёты в JSONL, CSV и Markdown;
-- опционально использует OpenSERP как поисковый слой для свежих источников.
+- опционально использует OpenSERP как поисковый слой для свежих источников;
+- поддерживает no-key режим через ручной CSV-опрос веб-версий нейросетей.
 
 ## Установка
 
@@ -24,7 +25,33 @@ pip install -e .
 cp .env.example .env
 ```
 
-Заполни `.env` ключами нужных провайдеров.
+Заполни `.env` ключами нужных провайдеров. Если ключей нет, используй ручной режим ниже.
+
+## Если API-ключей нет
+
+Сгенерируй таблицу промптов:
+
+```bash
+neirosearch manual-template \
+  --brand "Название Компании" \
+  --industry "ремонт квартир под ключ" \
+  --region "Москва" \
+  --output outputs/manual_prompts.csv
+```
+
+Открой CSV, вставь каждый промпт в веб-версии ChatGPT/Gemini/Qwen/GigaChat/Claude/Perplexity/DeepSeek/Grok, затем вставь ответы в колонку `answer`.
+
+Потом собери отчёт:
+
+```bash
+neirosearch manual-import \
+  --input outputs/manual_prompts.csv \
+  --brand "Название Компании" \
+  --competitors "Конкурент 1,Конкурент 2" \
+  --output outputs/manual_report
+```
+
+Подробно: `docs/NO_API_KEYS.md`.
 
 ## Проверить готовность провайдеров
 
@@ -32,7 +59,7 @@ cp .env.example .env
 neirosearch providers
 ```
 
-## Запуск аудита
+## Запуск аудита через API
 
 ```bash
 neirosearch run \
