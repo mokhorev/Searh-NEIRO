@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "searh-neiro"
+version = "0.1.0"
+description = "Multi-LLM probe tool for AI visibility audits in Russia and global/VPN environments"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Vadim Mokhorev" }]
+dependencies = [
+  "openai>=1.40.0",
+  "requests>=2.32.0",
+  "pyyaml>=6.0.1",
+  "typer>=0.12.0",
+  "rich>=13.7.0",
+  "python-dotenv>=1.0.1"
+]
+
+[project.scripts]
+neirosearch = "neirosearch.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
