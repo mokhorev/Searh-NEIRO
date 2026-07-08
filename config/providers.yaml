@@ -1,0 +1,162 @@
+# Providers used by Searh-NEIRO.
+# enabled=true means the provider will be attempted if required environment variables exist.
+# Most global providers below are reachable through official APIs. Access from Russia can depend on account, payment, VPN and provider terms.
+
+providers:
+  # OpenAI / ChatGPT API
+  - id: openai
+    label: OpenAI GPT
+    type: openai_compatible
+    enabled: true
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    model: gpt-5.2
+    market: global_vpn
+
+  # Google Gemini API, OpenAI-compatible endpoint
+  - id: gemini
+    label: Google Gemini
+    type: openai_compatible
+    enabled: true
+    api_key_env: GEMINI_API_KEY
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    model: gemini-3.5-flash
+    market: global_vpn
+
+  # Alibaba Cloud Model Studio / Qwen / DashScope OpenAI-compatible endpoint
+  - id: qwen
+    label: Qwen / Alibaba Cloud Model Studio
+    type: openai_compatible
+    enabled: true
+    api_key_env: DASHSCOPE_API_KEY
+    base_url: https://dashscope-us.aliyuncs.com/compatible-mode/v1
+    model: qwen-plus
+    market: global_vpn_cn
+
+  - id: deepseek
+    label: DeepSeek
+    type: openai_compatible
+    enabled: true
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    model: deepseek-v4-pro
+    market: global_vpn_cn
+
+  - id: xai
+    label: xAI Grok
+    type: openai_compatible
+    enabled: true
+    api_key_env: XAI_API_KEY
+    base_url: https://api.x.ai/v1
+    model: grok-4.3
+    market: global_vpn
+
+  - id: mistral
+    label: Mistral AI
+    type: openai_compatible
+    enabled: true
+    api_key_env: MISTRAL_API_KEY
+    base_url: https://api.mistral.ai/v1
+    model: mistral-large-latest
+    market: global_vpn_eu
+
+  # Groq is not Grok. Groq hosts fast inference for open-source models.
+  - id: groq
+    label: Groq Inference
+    type: openai_compatible
+    enabled: true
+    api_key_env: GROQ_API_KEY
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.3-70b-versatile
+    market: global_vpn
+
+  - id: openrouter
+    label: OpenRouter aggregator
+    type: openai_compatible
+    enabled: true
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-5.2
+    market: aggregator_global_vpn
+
+  - id: together
+    label: Together AI
+    type: openai_compatible
+    enabled: true
+    api_key_env: TOGETHER_API_KEY
+    base_url: https://api.together.xyz/v1
+    model: meta-llama/Llama-3.3-70B-Instruct-Turbo
+    market: global_vpn
+
+  - id: fireworks
+    label: Fireworks AI
+    type: openai_compatible
+    enabled: true
+    api_key_env: FIREWORKS_API_KEY
+    base_url: https://api.fireworks.ai/inference/v1
+    model: accounts/fireworks/models/llama-v3p1-70b-instruct
+    market: global_vpn
+
+  # Russian providers
+  - id: gigachat
+    label: Sber GigaChat
+    type: gigachat
+    enabled: true
+    auth_key_env: GIGACHAT_AUTH_KEY
+    scope_env: GIGACHAT_SCOPE
+    model: GigaChat
+    market: russia
+
+  - id: yandexgpt
+    label: YandexGPT / Yandex AI Studio
+    type: yandexgpt
+    enabled: true
+    api_key_env: YANDEX_API_KEY
+    folder_id_env: YANDEX_FOLDER_ID
+    model: yandexgpt/latest
+    market: russia
+
+  # Native APIs
+  - id: claude
+    label: Anthropic Claude
+    type: anthropic
+    enabled: true
+    api_key_env: ANTHROPIC_API_KEY
+    model: claude-sonnet-4-5
+    market: global_vpn
+
+  - id: perplexity
+    label: Perplexity Sonar
+    type: perplexity
+    enabled: true
+    api_key_env: PERPLEXITY_API_KEY
+    model: sonar-pro
+    market: global_vpn_search
+
+  # Local providers
+  - id: ollama
+    label: Ollama local
+    type: ollama
+    enabled: true
+    base_url_env: OLLAMA_BASE_URL
+    model: qwen2.5:7b
+    market: local
+
+  - id: lmstudio
+    label: LM Studio local OpenAI-compatible
+    type: openai_compatible
+    enabled: true
+    api_key: not-needed
+    base_url_env: LMSTUDIO_BASE_URL
+    model: local-model
+    market: local
+
+  # Custom OpenAI-compatible provider for Kimi, GLM, MiniMax, vLLM, LiteLLM, proxy endpoints etc.
+  - id: custom_openai
+    label: Custom OpenAI-compatible endpoint
+    type: openai_compatible
+    enabled: false
+    api_key_env: CUSTOM_OPENAI_API_KEY
+    base_url_env: CUSTOM_OPENAI_BASE_URL
+    model_env: CUSTOM_OPENAI_MODEL
+    market: custom
