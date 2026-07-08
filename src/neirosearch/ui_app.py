@@ -7,10 +7,20 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from .analyzer import analyze_answer, summarize_results
-from .manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
-from .models import ProviderResult
-from .reports import write_all_reports
+# Works both as package entrypoint and as `streamlit run src\neirosearch\ui_app.py`.
+try:
+    from .analyzer import analyze_answer, summarize_results
+    from .manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
+    from .models import ProviderResult
+    from .reports import write_all_reports
+except ImportError:
+    root = Path(__file__).resolve().parents[2]
+    if str(root / "src") not in sys.path:
+        sys.path.insert(0, str(root / "src"))
+    from neirosearch.analyzer import analyze_answer, summarize_results
+    from neirosearch.manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
+    from neirosearch.models import ProviderResult
+    from neirosearch.reports import write_all_reports
 
 COMPANY_COLS = ["brand", "industry", "region", "competitors"]
 TASKS_PATH = Path("outputs/ui_tasks.csv")
@@ -61,33 +71,11 @@ def ensure_files() -> None:
     Path("inputs").mkdir(exist_ok=True)
     Path("outputs").mkdir(exist_ok=True)
     if not COMPANIES_PATH.exists():
-        pd.DataFrame(
-            [
-                {
-                    "brand": "В отражении",
-                    "industry": "сложное окрашивание волос",
-                    "region": "Красноярск",
-                    "competitors": "Салон 1,Салон 2",
-                }
-            ]
-        ).to_csv(COMPANIES_PATH, sep=CSV_SEP, index=False, encoding="utf-8-sig")
+        pd.DataFrame([{"brand": "В отражении", "industry": "сложное окрашивание волос", "region": "Красноярск", "competitors": "Салон 1,Салон 2"}]).to_csv(COMPANIES_PATH, sep=CSV_SEP, index=False, encoding="utf-8-sig")
     if not PROMPTS_PATH.exists():
         PROMPTS_PATH.write_text("\n".join(DEFAULT_PROMPTS), encoding="utf-8")
     if not PROVIDERS_PATH.exists():
-        PROVIDERS_PATH.write_text(
-            "\n".join(
-                [
-                    "chatgpt_web",
-                    "gemini_web",
-                    "qwen_web",
-                    "gigachat_web",
-                    "perplexity_web",
-                    "deepseek_web",
-                    "grok_web",
-                ]
-            ),
-            encoding="utf-8",
-        )
+        PROVIDERS_PATH.write_text("\n".join(["chatgpt_web", "gemini_web", "qwen_web", "gigachat_web", "perplexity_web", "deepseek_web", "grok_web"]), encoding="utf-8")
 
 
 def read_csv_any(path: Path, columns: list[str]) -> pd.DataFrame:
@@ -103,7 +91,7 @@ def read_csv_any(path: Path, columns: list[str]) -> pd.DataFrame:
     return df[columns].fillna("")
 
 
-def write_csv_excel(df: pd.DataFrame, path: Path) -> None:
+def write_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, sep=CSV_SEP, index=False, encoding="utf-8-sig")
 
@@ -115,7 +103,7 @@ def load_companies() -> pd.DataFrame:
 def save_companies(df: pd.DataFrame) -> None:
     df = df[COMPANY_COLS].fillna("")
     df = df[df["brand"].astype(str).str.strip() != ""]
-    write_csv_excel(df, COMPANIES_PATH)
+    write_csv(df, COMPANIES_PATH)
 
 
 def load_prompts_text() -> str:
@@ -123,7 +111,6 @@ def load_prompts_text() -> str:
 
 
 def save_prompts_text(text: str) -> None:
-    PROMPTS_PATH.parent.mkdir(exist_ok=True)
     PROMPTS_PATH.write_text(text.strip() + "\n", encoding="utf-8")
 
 
@@ -134,8 +121,7 @@ def parse_prompts(text: str) -> list[str]:
 def load_provider_ids() -> list[str]:
     if not PROVIDERS_PATH.exists():
         return ["chatgpt_web", "gemini_web", "qwen_web", "gigachat_web", "perplexity_web"]
-    ids = [line.strip() for line in PROVIDERS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
-    return [pid for pid in ids if pid in MANUAL_PROVIDERS]
+    return [line.strip() for line in PROVIDERS_PATH.read_text(encoding="utf-8").splitlines() if line.strip() in MANUAL_PROVIDERS]
 
 
 def save_provider_ids(ids: list[str]) -> None:
@@ -143,7 +129,7 @@ def save_provider_ids(ids: list[str]) -> None:
 
 
 def build_tasks(companies: pd.DataFrame, prompts: list[str], providers: list[str]) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
+    rows = []
     for _, company in companies.iterrows():
         brand = str(company.get("brand", "")).strip()
         if not brand:
@@ -157,22 +143,7 @@ def build_tasks(companies: pd.DataFrame, prompts: list[str], providers: list[str
                     prompt = template.format(brand=brand, industry=industry, region=region)
                 except Exception:
                     prompt = template
-                rows.append(
-                    {
-                        "brand": brand,
-                        "industry": industry,
-                        "region": region,
-                        "competitors": competitors,
-                        "provider_id": provider,
-                        "provider_label": PROVIDER_LABELS.get(provider, provider),
-                        "model": "web/manual",
-                        "prompt_id": prompt_id,
-                        "prompt": prompt,
-                        "answer": "",
-                        "citations": "",
-                        "notes": "",
-                    }
-                )
+                rows.append({"brand": brand, "industry": industry, "region": region, "competitors": competitors, "provider_id": provider, "provider_label": PROVIDER_LABELS.get(provider, provider), "model": "web/manual", "prompt_id": prompt_id, "prompt": prompt, "answer": "", "citations": "", "notes": ""})
     return pd.DataFrame(rows, columns=TASK_FIELDNAMES)
 
 
@@ -184,7 +155,7 @@ def save_tasks(df: pd.DataFrame) -> None:
     for col in TASK_FIELDNAMES:
         if col not in df.columns:
             df[col] = ""
-    write_csv_excel(df[TASK_FIELDNAMES].fillna(""), TASKS_PATH)
+    write_csv(df[TASK_FIELDNAMES].fillna(""), TASKS_PATH)
 
 
 def task_progress(tasks: pd.DataFrame) -> tuple[int, int, int]:
@@ -195,21 +166,7 @@ def task_progress(tasks: pd.DataFrame) -> tuple[int, int, int]:
 
 def row_to_result(row: pd.Series) -> ProviderResult:
     citations = [item.strip() for item in str(row.get("citations", "")).split(",") if item.strip()]
-    return ProviderResult(
-        provider_id=str(row.get("provider_id", "manual")),
-        provider_label=str(row.get("provider_label", "Manual")),
-        model=str(row.get("model", "web/manual")),
-        prompt=str(row.get("prompt", "")),
-        ok=True,
-        answer=str(row.get("answer", "")),
-        citations=citations,
-        raw={
-            "prompt_id": row.get("prompt_id", ""),
-            "industry": row.get("industry", ""),
-            "region": row.get("region", ""),
-            "notes": row.get("notes", ""),
-        },
-    )
+    return ProviderResult(provider_id=str(row.get("provider_id", "manual")), provider_label=str(row.get("provider_label", "Manual")), model=str(row.get("model", "web/manual")), prompt=str(row.get("prompt", "")), ok=True, answer=str(row.get("answer", "")), citations=citations, raw={"prompt_id": row.get("prompt_id", ""), "industry": row.get("industry", ""), "region": row.get("region", ""), "notes": row.get("notes", "")})
 
 
 def split_competitors(value: str) -> list[str]:
@@ -223,46 +180,13 @@ def slugify(value: str) -> str:
     return safe.strip("_") or "company"
 
 
-def sidebar(tasks: pd.DataFrame) -> str:
-    total, done, pending = task_progress(tasks)
-    with st.sidebar:
-        st.title("Searh-NEIRO")
-        st.caption("Локальный кабинет аудита AI-видимости")
-        st.metric("Всего задач", total)
-        st.metric("Готово", done)
-        st.metric("Осталось", pending)
-        st.divider()
-        return st.radio(
-            "Раздел",
-            ["Компании", "Промпты", "Нейросети", "Очередь", "По компаниям", "Отчёт"],
-            label_visibility="collapsed",
-        )
-
-
 def page_companies() -> None:
     st.header("1. Компании")
     st.caption("Список как в Airtable/Notion: одна строка — одна компания.")
-    companies = load_companies()
-    edited = st.data_editor(
-        companies,
-        num_rows="dynamic",
-        hide_index=True,
-        width="stretch",
-        height=320,
-        column_config={
-            "brand": st.column_config.TextColumn("Компания", required=True, width="medium"),
-            "industry": st.column_config.TextColumn("Ниша / услуга", width="large"),
-            "region": st.column_config.TextColumn("Город / регион", width="medium"),
-            "competitors": st.column_config.TextColumn("Конкуренты через запятую", width="large"),
-        },
-    )
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("Сохранить компании", type="primary"):
-            save_companies(edited)
-            st.success("Сохранено")
-    with col2:
-        st.info("Можно вставлять строки прямо из Excel. Главное: заполнить колонку «Компания».")
+    edited = st.data_editor(load_companies(), num_rows="dynamic", hide_index=True, width="stretch", height=360, column_config={"brand": st.column_config.TextColumn("Компания", required=True), "industry": st.column_config.TextColumn("Ниша / услуга"), "region": st.column_config.TextColumn("Город / регион"), "competitors": st.column_config.TextColumn("Конкуренты через запятую")})
+    if st.button("Сохранить компании", type="primary"):
+        save_companies(edited)
+        st.success("Сохранено")
 
 
 def page_prompts() -> None:
@@ -271,25 +195,20 @@ def page_prompts() -> None:
     text = st.text_area("Список промптов", value=load_prompts_text(), height=360)
     if st.button("Сохранить промпты", type="primary"):
         save_prompts_text(text)
-        st.success("Промпты сохранены")
-    with st.expander("Пример хороших промптов"):
+        st.success("Сохранено")
+    with st.expander("Примеры"):
         st.code("\n".join(DEFAULT_PROMPTS), language="text")
 
 
 def page_providers() -> None:
     st.header("3. Нейросети")
-    st.caption("Выбери веб-нейросети, которые тебе реально доступны через браузер/VPN.")
     current = load_provider_ids()
     labels = {pid: f"{PROVIDER_LABELS.get(pid, pid)} ({pid})" for pid in MANUAL_PROVIDERS}
-    selected_labels = st.multiselect(
-        "Провайдеры",
-        options=[labels[pid] for pid in MANUAL_PROVIDERS],
-        default=[labels[pid] for pid in current if pid in labels],
-    )
+    selected_labels = st.multiselect("Выбери доступные нейросети", [labels[pid] for pid in MANUAL_PROVIDERS], default=[labels[pid] for pid in current if pid in labels])
     selected = [pid for pid in MANUAL_PROVIDERS if labels[pid] in selected_labels]
     if st.button("Сохранить список нейросетей", type="primary"):
         save_provider_ids(selected)
-        st.success("Список сохранён")
+        st.success("Сохранено")
     st.subheader("Быстрые ссылки")
     cols = st.columns(3)
     for i, pid in enumerate(selected or current):
@@ -299,104 +218,58 @@ def page_providers() -> None:
 
 
 def page_queue() -> None:
-    st.header("4. Очередь задач")
-    companies = load_companies()
-    prompts = parse_prompts(load_prompts_text())
-    providers = load_provider_ids()
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Компаний", len(companies))
-    with col2:
-        st.metric("Промптов", len(prompts))
-    with col3:
-        st.metric("Нейросетей", len(providers))
-
+    st.header("4. Очередь")
+    companies, prompts, providers = load_companies(), parse_prompts(load_prompts_text()), load_provider_ids()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Компаний", len(companies)); c2.metric("Промптов", len(prompts)); c3.metric("Нейросетей", len(providers))
     if st.button("Сгенерировать новую очередь", type="primary"):
         tasks = build_tasks(companies, prompts, providers)
         save_tasks(tasks)
         st.success(f"Создано задач: {len(tasks)}")
         st.rerun()
-
     tasks = load_tasks()
     total, done, pending = task_progress(tasks)
     st.progress(done / total if total else 0)
     st.caption(f"Готово {done} из {total}. Осталось {pending}.")
-
     if tasks.empty:
-        st.warning("Очередь пустая. Нажми «Сгенерировать новую очередь».")
+        st.warning("Очередь пустая. Нажми кнопку генерации.")
         return
-
-    status = st.selectbox("Показать", ["Остались", "Готовые", "Все"])
-    view = tasks.copy()
-    is_done = view["answer"].fillna("").astype(str).str.strip().ne("")
-    if status == "Остались":
-        view = view[~is_done]
-    elif status == "Готовые":
-        view = view[is_done]
-
-    st.dataframe(
-        view[["brand", "provider_label", "prompt_id", "prompt", "answer"]],
-        hide_index=False,
-        height=260,
-        width="stretch",
-    )
-
     pending_tasks = tasks[tasks["answer"].fillna("").astype(str).str.strip().eq("")]
     work_source = pending_tasks if not pending_tasks.empty else tasks
-    options = [
-        f"{idx} | {row['brand']} | {row['provider_label']} | #{row['prompt_id']} | {str(row['prompt'])[:80]}"
-        for idx, row in work_source.iterrows()
-    ]
-    selected = st.selectbox("Текущая задача", options) if options else None
-    if not selected:
-        return
+    options = [f"{idx} | {row['brand']} | {row['provider_label']} | #{row['prompt_id']} | {str(row['prompt'])[:80]}" for idx, row in work_source.iterrows()]
+    selected = st.selectbox("Текущая задача", options)
     idx = int(str(selected).split(" | ", 1)[0])
     row = tasks.loc[idx]
-
     st.subheader(f"{row['brand']} → {row['provider_label']}")
-    url = PROVIDER_URLS.get(str(row["provider_id"]))
-    if url:
-        st.link_button(f"Открыть {row['provider_label']}", url)
+    if row["provider_id"] in PROVIDER_URLS:
+        st.link_button(f"Открыть {row['provider_label']}", PROVIDER_URLS[str(row["provider_id"])])
     st.text_area("Промпт для копирования", value=str(row["prompt"]), height=130, key=f"prompt_{idx}")
     answer = st.text_area("Вставь ответ нейросети", value=str(row.get("answer", "")), height=260, key=f"answer_{idx}")
-    citations = st.text_input("Ссылки / цитаты через запятую", value=str(row.get("citations", "")), key=f"citations_{idx}")
+    citations = st.text_input("Ссылки через запятую", value=str(row.get("citations", "")), key=f"citations_{idx}")
     notes = st.text_input("Заметки", value=str(row.get("notes", "")), key=f"notes_{idx}")
-
-    col_save, col_clear = st.columns(2)
-    with col_save:
-        if st.button("Сохранить ответ", type="primary"):
-            tasks.at[idx, "answer"] = answer
-            tasks.at[idx, "citations"] = citations
-            tasks.at[idx, "notes"] = notes
-            save_tasks(tasks)
-            st.success("Ответ сохранён")
-            st.rerun()
-    with col_clear:
-        if st.button("Очистить ответ"):
-            tasks.at[idx, "answer"] = ""
-            tasks.at[idx, "citations"] = ""
-            tasks.at[idx, "notes"] = ""
-            save_tasks(tasks)
-            st.warning("Ответ очищен")
-            st.rerun()
+    if st.button("Сохранить ответ", type="primary"):
+        tasks.at[idx, "answer"] = answer
+        tasks.at[idx, "citations"] = citations
+        tasks.at[idx, "notes"] = notes
+        save_tasks(tasks)
+        st.success("Ответ сохранён")
+        st.rerun()
+    st.divider()
+    st.dataframe(tasks[["brand", "provider_label", "prompt_id", "prompt", "answer"]], hide_index=True, height=260, width="stretch")
 
 
 def page_company_view() -> None:
-    st.header("5. Вид по каждой компании")
+    st.header("5. По компаниям")
     tasks = load_tasks()
     if tasks.empty:
-        st.warning("Очередь пока пустая.")
+        st.warning("Очередь пустая.")
         return
-    companies = sorted(tasks["brand"].dropna().astype(str).unique())
-    brand = st.selectbox("Компания", companies)
+    brand = st.selectbox("Компания", sorted(tasks["brand"].dropna().astype(str).unique()))
     data = tasks[tasks["brand"] == brand].copy()
-    is_done = data["answer"].fillna("").astype(str).str.strip().ne("")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Задач", len(data))
-    col2.metric("Ответов", int(is_done.sum()))
-    col3.metric("Осталось", int((~is_done).sum()))
-    pivot = data.assign(done=is_done).groupby("provider_label")["done"].agg(["sum", "count"]).reset_index()
+    done = data["answer"].fillna("").astype(str).str.strip().ne("")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Задач", len(data)); c2.metric("Ответов", int(done.sum())); c3.metric("Осталось", int((~done).sum()))
+    pivot = data.assign(done=done).groupby("provider_label")["done"].agg(["sum", "count"]).reset_index()
     pivot["progress"] = pivot["sum"].astype(str) + " / " + pivot["count"].astype(str)
     st.dataframe(pivot[["provider_label", "progress"]], hide_index=True, width="stretch")
     st.dataframe(data[["provider_label", "prompt_id", "prompt", "answer", "notes"]], hide_index=True, height=420, width="stretch")
@@ -407,41 +280,22 @@ def page_report() -> None:
     tasks = load_tasks()
     answered = tasks[tasks["answer"].fillna("").astype(str).str.strip().ne("")].copy()
     if answered.empty:
-        st.warning("Пока нет заполненных ответов.")
+        st.warning("Пока нет ответов.")
         return
-    companies = sorted(answered["brand"].dropna().astype(str).unique())
-    brand = st.selectbox("Компания для отчёта", companies)
+    brand = st.selectbox("Компания", sorted(answered["brand"].dropna().astype(str).unique()))
     data = answered[answered["brand"] == brand]
     competitors = split_competitors(str(data["competitors"].iloc[0] if not data.empty else ""))
     results = [row_to_result(row) for _, row in data.iterrows()]
     summary = summarize_results(results, brand=brand, competitors=competitors)
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ответов", summary["ok_results"])
-    col2.metric("Бренд найден", summary["brand_found"])
-    col3.metric("Рекомендован", summary["brand_recommended"])
-    col4.metric("Видимость", summary["visibility_rate"])
-
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Ответов", summary["ok_results"]); c2.metric("Бренд найден", summary["brand_found"]); c3.metric("Рекомендован", summary["brand_recommended"]); c4.metric("Видимость", summary["visibility_rate"])
     rows = []
     for _, row in data.iterrows():
         analysis = analyze_answer(str(row["answer"]), brand, competitors)
-        rows.append(
-            {
-                "provider": row["provider_label"],
-                "prompt_id": row["prompt_id"],
-                "brand_found": analysis.brand_found,
-                "position": analysis.brand_position,
-                "role": analysis.role,
-                "competitors_found": ", ".join(analysis.competitors_found),
-                "prompt": row["prompt"],
-                "answer": row["answer"],
-            }
-        )
+        rows.append({"provider": row["provider_label"], "prompt_id": row["prompt_id"], "brand_found": analysis.brand_found, "position": analysis.brand_position, "role": analysis.role, "competitors_found": ", ".join(analysis.competitors_found), "prompt": row["prompt"], "answer": row["answer"]})
     st.dataframe(pd.DataFrame(rows), hide_index=True, height=420, width="stretch")
-
     if st.button("Сформировать файлы отчёта", type="primary"):
-        out_dir = Path("outputs/ui_report") / slugify(brand)
-        paths = write_all_reports(results, out_dir, brand=brand, competitors=competitors)
+        paths = write_all_reports(results, Path("outputs/ui_report") / slugify(brand), brand=brand, competitors=competitors)
         st.success("Отчёт сформирован")
         for path in paths:
             st.write(str(path))
@@ -450,17 +304,13 @@ def page_report() -> None:
 def render_app() -> None:
     ensure_files()
     st.set_page_config(page_title="Searh-NEIRO", layout="wide")
-    st.markdown(
-        """
-        <style>
-        .block-container {padding-top: 1.2rem;}
-        div[data-testid="stMetric"] {background: #f6f8fa; padding: 10px; border-radius: 12px;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     tasks = load_tasks()
-    page = sidebar(tasks)
+    total, done, pending = task_progress(tasks)
+    with st.sidebar:
+        st.title("Searh-NEIRO")
+        st.caption("Кабинет аудита AI-видимости")
+        st.metric("Всего", total); st.metric("Готово", done); st.metric("Осталось", pending)
+        page = st.radio("Раздел", ["Компании", "Промпты", "Нейросети", "Очередь", "По компаниям", "Отчёт"], label_visibility="collapsed")
     if page == "Компании":
         page_companies()
     elif page == "Промпты":
