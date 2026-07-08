@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,11 +9,9 @@ from typing import Any
 import pandas as pd
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 except Exception:  # pragma: no cover - handled at runtime
     sync_playwright = None  # type: ignore[assignment]
-    PlaywrightTimeoutError = Exception  # type: ignore[assignment]
 
 TASKS_PATH = Path("outputs/ui_tasks.csv")
 PROFILE_DIR = Path("browser_profile")
@@ -63,6 +62,13 @@ ANSWER_SELECTORS = {
     "grok_web": ["article", ".markdown", "main"],
 }
 
+COMMON_WINDOWS_BROWSERS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+]
+
 
 @dataclass(slots=True)
 class BrowserRunResult:
@@ -79,9 +85,60 @@ class BrowserRunResult:
 
 def require_playwright() -> None:
     if sync_playwright is None:
-        raise RuntimeError(
-            "Playwright не установлен. Выполни: pip install -e . && python -m playwright install chromium"
+        raise RuntimeError("Playwright не установлен. Выполни: pip install playwright")
+
+
+def find_local_browser() -> str | None:
+    env_path = os.getenv("NEIRO_BROWSER_PATH") or os.getenv("BROWSER_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
+    for candidate in COMMON_WINDOWS_BROWSERS:
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+def launch_visible_context(playwright: Any, profile_dir: Path):
+    """Launch visible browser using installed Chrome/Edge first.
+
+    This avoids `playwright install chromium`, which can fail behind corporate or antivirus
+    certificate inspection. If no installed browser is found, it falls back to Playwright's bundled
+    browser and prints a clear error if that browser is missing.
+    """
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    executable = find_local_browser()
+    common_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+    ]
+    if executable:
+        return playwright.chromium.launch_persistent_context(
+            str(profile_dir),
+            headless=False,
+            executable_path=executable,
+            args=common_args,
         )
+    try:
+        return playwright.chromium.launch_persistent_context(
+            str(profile_dir),
+            headless=False,
+            channel="chrome",
+            args=common_args,
+        )
+    except Exception:
+        try:
+            return playwright.chromium.launch_persistent_context(
+                str(profile_dir),
+                headless=False,
+                channel="msedge",
+                args=common_args,
+            )
+        except Exception:
+            return playwright.chromium.launch_persistent_context(
+                str(profile_dir),
+                headless=False,
+                args=common_args,
+            )
 
 
 def read_tasks(path: Path = TASKS_PATH) -> pd.DataFrame:
@@ -116,11 +173,10 @@ def pending_task_indexes(df: pd.DataFrame, providers: list[str] | None = None) -
 
 
 def open_login_pages(providers: list[str], profile_dir: Path = PROFILE_DIR) -> None:
-    """Open provider pages in a persistent visible browser so the user can log in."""
     require_playwright()
     profile_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:  # type: ignore[operator]
-        browser = p.chromium.launch_persistent_context(str(profile_dir), headless=False)
+        browser = launch_visible_context(p, profile_dir)
         for provider in providers:
             url = PROVIDER_URLS.get(provider)
             if url:
@@ -211,11 +267,6 @@ def run_pending_tasks(
     profile_dir: Path = PROFILE_DIR,
     tasks_path: Path = TASKS_PATH,
 ) -> BrowserRunResult:
-    """Run a small visible browser batch over pending UI tasks.
-
-    The function does not bypass login or CAPTCHA. It uses the local persistent profile and saves
-    only answers it can read from the visible page. Failed tasks remain in the queue for manual fill.
-    """
     require_playwright()
     result = BrowserRunResult(logs=[])
     df = read_tasks(tasks_path)
@@ -228,7 +279,7 @@ def run_pending_tasks(
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:  # type: ignore[operator]
-        context = p.chromium.launch_persistent_context(str(profile_dir), headless=False)
+        context = launch_visible_context(p, profile_dir)
         page = context.new_page()
         for idx in indexes:
             row = df.loc[idx]
