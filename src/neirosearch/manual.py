@@ -34,6 +34,19 @@ TASK_FIELDNAMES = [
     "notes",
 ]
 
+EXCEL_DELIMITER = ";"
+
+
+def open_csv_reader(path: str | Path) -> csv.DictReader:
+    fh = Path(path).open("r", encoding="utf-8-sig", newline="")
+    sample = fh.read(4096)
+    fh.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    return csv.DictReader(fh, dialect=dialect)
+
 
 def write_manual_template(
     prompts: list[str],
@@ -56,6 +69,7 @@ def write_manual_template(
                 "citations",
                 "notes",
             ],
+            delimiter=EXCEL_DELIMITER,
         )
         writer.writeheader()
         for provider in providers:
@@ -77,52 +91,54 @@ def write_manual_template(
 
 def read_manual_answers(path: str | Path) -> list[ProviderResult]:
     results: list[ProviderResult] = []
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            answer = (row.get("answer") or "").strip()
-            if not answer:
-                continue
-            citations = [item.strip() for item in (row.get("citations") or "").split(",") if item.strip()]
-            results.append(
-                ProviderResult(
-                    provider_id=row.get("provider_id") or "manual",
-                    provider_label=row.get("provider_label") or row.get("provider_id") or "Manual",
-                    model=row.get("model") or "web/manual",
-                    prompt=row.get("prompt") or "",
-                    ok=True,
-                    answer=answer,
-                    citations=citations,
-                    raw={"prompt_id": row.get("prompt_id"), "notes": row.get("notes")},
-                )
+    reader = open_csv_reader(path)
+    for row in reader:
+        answer = (row.get("answer") or "").strip()
+        if not answer:
+            continue
+        citations = [item.strip() for item in (row.get("citations") or "").split(",") if item.strip()]
+        results.append(
+            ProviderResult(
+                provider_id=row.get("provider_id") or "manual",
+                provider_label=row.get("provider_label") or row.get("provider_id") or "Manual",
+                model=row.get("model") or "web/manual",
+                prompt=row.get("prompt") or "",
+                ok=True,
+                answer=answer,
+                citations=citations,
+                raw={"prompt_id": row.get("prompt_id"), "notes": row.get("notes")},
             )
+        )
     return results
 
 
 def read_companies(path: str | Path) -> list[dict[str, str]]:
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as fh:
-        reader = csv.DictReader(fh)
-        rows = []
-        for row in reader:
-            brand = (row.get("brand") or "").strip()
-            if not brand:
-                continue
-            rows.append(
-                {
-                    "brand": brand,
-                    "industry": (row.get("industry") or "").strip(),
-                    "region": (row.get("region") or "").strip(),
-                    "competitors": (row.get("competitors") or "").strip(),
-                }
-            )
-        return rows
+    reader = open_csv_reader(path)
+    rows = []
+    for row in reader:
+        brand = (row.get("brand") or "").strip()
+        if not brand:
+            continue
+        rows.append(
+            {
+                "brand": brand,
+                "industry": (row.get("industry") or "").strip(),
+                "region": (row.get("region") or "").strip(),
+                "competitors": (row.get("competitors") or "").strip(),
+            }
+        )
+    return rows
 
 
 def write_companies_example(path: str | Path) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["brand", "industry", "region", "competitors"])
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["brand", "industry", "region", "competitors"],
+            delimiter=EXCEL_DELIMITER,
+        )
         writer.writeheader()
         writer.writerow(
             {
@@ -146,7 +162,7 @@ def write_batch_manual_template(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=TASK_FIELDNAMES)
+        writer = csv.DictWriter(fh, fieldnames=TASK_FIELDNAMES, delimiter=EXCEL_DELIMITER)
         writer.writeheader()
         for company in companies:
             for provider in providers:
@@ -177,35 +193,34 @@ def write_batch_manual_template(
 
 def read_batch_manual_answers(path: str | Path) -> dict[str, dict[str, object]]:
     grouped: dict[str, dict[str, object]] = {}
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            answer = (row.get("answer") or "").strip()
-            if not answer:
-                continue
-            brand = (row.get("brand") or "").strip()
-            if not brand:
-                continue
-            citations = [item.strip() for item in (row.get("citations") or "").split(",") if item.strip()]
-            result = ProviderResult(
-                provider_id=row.get("provider_id") or "manual",
-                provider_label=row.get("provider_label") or row.get("provider_id") or "Manual",
-                model=row.get("model") or "web/manual",
-                prompt=row.get("prompt") or "",
-                ok=True,
-                answer=answer,
-                citations=citations,
-                raw={
-                    "prompt_id": row.get("prompt_id"),
-                    "notes": row.get("notes"),
-                    "industry": row.get("industry"),
-                    "region": row.get("region"),
-                },
-            )
-            if brand not in grouped:
-                grouped[brand] = {
-                    "competitors": row.get("competitors") or "",
-                    "results": [],
-                }
-            grouped[brand]["results"].append(result)  # type: ignore[index, union-attr]
+    reader = open_csv_reader(path)
+    for row in reader:
+        answer = (row.get("answer") or "").strip()
+        if not answer:
+            continue
+        brand = (row.get("brand") or "").strip()
+        if not brand:
+            continue
+        citations = [item.strip() for item in (row.get("citations") or "").split(",") if item.strip()]
+        result = ProviderResult(
+            provider_id=row.get("provider_id") or "manual",
+            provider_label=row.get("provider_label") or row.get("provider_id") or "Manual",
+            model=row.get("model") or "web/manual",
+            prompt=row.get("prompt") or "",
+            ok=True,
+            answer=answer,
+            citations=citations,
+            raw={
+                "prompt_id": row.get("prompt_id"),
+                "notes": row.get("notes"),
+                "industry": row.get("industry"),
+                "region": row.get("region"),
+            },
+        )
+        if brand not in grouped:
+            grouped[brand] = {
+                "competitors": row.get("competitors") or "",
+                "results": [],
+            }
+        grouped[brand]["results"].append(result)  # type: ignore[index, union-attr]
     return grouped
