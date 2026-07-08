@@ -8,6 +8,8 @@ from typing import Any
 from .analyzer import result_record, summarize_results
 from .models import ProviderResult
 
+EXCEL_DELIMITER = ";"
+
 
 def ensure_output_dir(path: str | Path) -> Path:
     output_dir = Path(path)
@@ -41,7 +43,7 @@ def write_csv(results: list[ProviderResult], output_dir: Path, brand: str, compe
         "citations",
     ]
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter=EXCEL_DELIMITER)
         writer.writeheader()
         for result in results:
             record = result_record(result, brand, competitors)
