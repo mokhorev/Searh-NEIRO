@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .config import DEFAULT_CONFIG, filter_provider_configs, load_config
+from .manual import MANUAL_PROVIDERS, read_manual_answers, write_manual_template
 from .openserp import openserp_search
 from .prompts import DEFAULT_SYSTEM, load_prompts
 from .providers import build_provider, is_configured
@@ -107,6 +108,39 @@ def run_probe(
 
     paths = write_all_reports(results, Path(output), brand=brand, competitors=competitor_list)
     console.print("[bold green]Reports written:[/bold green]")
+    for path in paths:
+        console.print(f"- {path}")
+
+
+@app.command("manual-template")
+def manual_template(
+    brand: Annotated[str, typer.Option("--brand", "-b", help="Brand/company to audit")],
+    industry: Annotated[str, typer.Option("--industry", "-i", help="Service/product niche")],
+    region: Annotated[str, typer.Option("--region", "-r", help="City/region/country")] = "Россия",
+    providers: Annotated[str, typer.Option("--providers", "-p", help="Comma-separated manual web providers")] = "",
+    prompts_file: Annotated[str | None, typer.Option("--prompts", help="Prompt file with {brand}, {industry}, {region}")] = None,
+    output: Annotated[str, typer.Option("--output", "-o", help="CSV file to create")] = "outputs/manual_prompts.csv",
+) -> None:
+    """Create a CSV template for no-key/manual browser probing."""
+    prompts = load_prompts(prompts_file, brand=brand, industry=industry, region=region)
+    provider_list = [item.strip() for item in providers.split(",") if item.strip()] or MANUAL_PROVIDERS
+    path = write_manual_template(prompts=prompts, output_path=output, providers=provider_list)
+    console.print(f"[bold green]Manual template written:[/bold green] {path}")
+    console.print("Open the CSV, paste each prompt into the chosen web AI, then paste the answer into the answer column.")
+
+
+@app.command("manual-import")
+def manual_import(
+    input_file: Annotated[str, typer.Option("--input", "-i", help="Filled manual CSV")],
+    brand: Annotated[str, typer.Option("--brand", "-b", help="Brand/company to audit")],
+    competitors: Annotated[str, typer.Option("--competitors", help="Comma-separated competitor names")] = "",
+    output: Annotated[str, typer.Option("--output", "-o", help="Output directory")] = "outputs/manual_report",
+) -> None:
+    """Import filled manual answers CSV and generate JSONL/CSV/Markdown reports."""
+    results = read_manual_answers(input_file)
+    competitor_list = [item.strip() for item in competitors.split(",") if item.strip()]
+    paths = write_all_reports(results, Path(output), brand=brand, competitors=competitor_list)
+    console.print(f"[bold green]Imported manual answers:[/bold green] {len(results)}")
     for path in paths:
         console.print(f"- {path}")
 
