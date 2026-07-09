@@ -9,7 +9,12 @@ import streamlit as st
 
 # Works both as package entrypoint and as `streamlit run src\neirosearch\ui_app.py`.
 try:
-    from .analyzer import analyze_answer, extract_possible_company_names, summarize_results
+    from .analyzer import (
+        analyze_answer,
+        count_candidate_mentions,
+        extract_possible_company_names,
+        summarize_results,
+    )
     from .browser.combinator import (
         PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
         PROVIDER_URLS as BROWSER_PROVIDER_URLS,
@@ -18,12 +23,25 @@ try:
     )
     from .manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from .models import ProviderResult
+    from .openserp import (
+        DEFAULT_OPENSERP_BASE_URL,
+        DEFAULT_OPENSERP_ENGINES,
+        build_company_search_queries,
+        run_company_footprint_scan,
+        save_serp_results,
+        slugify as serp_slugify,
+    )
     from .reports import write_all_reports
 except ImportError:
     root = Path(__file__).resolve().parents[2]
     if str(root / "src") not in sys.path:
         sys.path.insert(0, str(root / "src"))
-    from neirosearch.analyzer import analyze_answer, extract_possible_company_names, summarize_results
+    from neirosearch.analyzer import (
+        analyze_answer,
+        count_candidate_mentions,
+        extract_possible_company_names,
+        summarize_results,
+    )
     from neirosearch.browser.combinator import (
         PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
         PROVIDER_URLS as BROWSER_PROVIDER_URLS,
@@ -32,6 +50,14 @@ except ImportError:
     )
     from neirosearch.manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from neirosearch.models import ProviderResult
+    from neirosearch.openserp import (
+        DEFAULT_OPENSERP_BASE_URL,
+        DEFAULT_OPENSERP_ENGINES,
+        build_company_search_queries,
+        run_company_footprint_scan,
+        save_serp_results,
+        slugify as serp_slugify,
+    )
     from neirosearch.reports import write_all_reports
 
 COMPANY_COLS = ["brand", "industry", "region", "competitors"]
@@ -249,6 +275,10 @@ def provider_multiselect(default_ids: list[str], key: str, only_browser: bool = 
     return [pid for pid in allowed if labels[pid] in selected_labels]
 
 
+def counts_to_frame(counts: dict[str, int], name_col: str = "компания / бренд-кандидат") -> pd.DataFrame:
+    return pd.DataFrame([{name_col: key, "сколько раз встречается": value} for key, value in counts.items()])
+
+
 def page_search() -> None:
     st.header("Поиск по нейросетям")
     st.caption("Выбери компанию, вставь промпты, выбери нейросети и нажми «Запустить поиск». Программа создаст очередь запросов и соберёт отчёт по ответам.")
@@ -257,7 +287,6 @@ def page_search() -> None:
     if companies.empty:
         st.warning("Сначала добавь компанию в разделе «Компании».")
         return
-
     brand = st.selectbox("Компания", companies["brand"].astype(str).tolist())
     company = selected_company_frame(companies, brand)
     if company.empty:
@@ -423,6 +452,8 @@ def page_browser() -> None:
                 f'python -m neirosearch.browser_cli run --providers "{selected_arg}" --limit {int(limit)} --delay {int(delay)} --timeout {int(timeout)}',
                 'python -m neirosearch.browser_cli run --providers "qwen_web" --limit 1 --delay 15 --timeout 360',
                 'python -m neirosearch.browser_cli run --providers "gigachat_web" --limit 1 --delay 15 --timeout 360',
+                'python -m neirosearch.browser_cli run --providers "gemini_web" --limit 1 --delay 15 --timeout 360',
+                'python -m neirosearch.browser_cli run --providers "grok_web" --limit 1 --delay 15 --timeout 360',
             ]),
             language="powershell",
         )
@@ -541,6 +572,122 @@ def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) ->
     return pd.DataFrame(rows)
 
 
+def serp_candidates_from_df(df: pd.DataFrame, brand: str) -> dict[str, int]:
+    if df.empty:
+        return {}
+    text_cols = [col for col in ["title", "snippet", "extracted_title"] if col in df.columns]
+    texts = []
+    for _, row in df.iterrows():
+        texts.append(" — ".join(str(row.get(col, "")) for col in text_cols))
+    return count_candidate_mentions(texts, brand=brand, limit_per_text=10)
+
+
+def page_sources_search() -> None:
+    st.header("Источники / Поиск")
+    st.caption("WEB_FOOTPRINT_SCAN через локальный OpenSERP. Это отдельный слой поиска, не замена автокомбайна по AI-ответам.")
+    st.info("OpenSERP должен быть поднят локально на 127.0.0.1:7000. Проект не настраивает прокси-пулы и не обходит капчи/защиты.")
+
+    companies = load_companies()
+    if companies.empty:
+        st.warning("Сначала добавь компанию в разделе «Компании».")
+        return
+
+    brand = st.selectbox("Компания для WEB_FOOTPRINT_SCAN", companies["brand"].astype(str).tolist(), key="serp_company")
+    company = selected_company_frame(companies, brand)
+    info = company.iloc[0] if not company.empty else pd.Series({"industry": "", "region": ""})
+    industry = str(info.get("industry", ""))
+    region = str(info.get("region", ""))
+
+    default_queries = build_company_search_queries(brand, industry=industry, region=region)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        base_url = st.text_input("OpenSERP base URL", value=DEFAULT_OPENSERP_BASE_URL)
+        engines = st.text_input("Поисковики", value=DEFAULT_OPENSERP_ENGINES)
+    with col2:
+        limit = st.number_input("Лимит на запрос", min_value=1, max_value=100, value=10, step=1)
+        timeout = st.number_input("HTTP timeout, сек", min_value=10, max_value=180, value=60, step=5)
+    with col3:
+        lang = st.text_input("Язык", value="RU")
+        region_code = st.text_input("Регион OpenSERP", value="RU")
+
+    mode = st.selectbox("Режим OpenSERP", ["balanced", "any", "fast"], index=0)
+    extract_enabled = st.checkbox("Извлекать текст с верхнего результата (медленнее)", value=False)
+    queries_text = st.text_area(
+        "Поисковые запросы — один на строку",
+        value="\n".join(default_queries),
+        height=180,
+    )
+
+    queries = parse_prompts(queries_text)
+    if st.button("Запустить WEB_FOOTPRINT_SCAN", type="primary"):
+        if not queries:
+            st.error("Добавь хотя бы один поисковый запрос.")
+            return
+        with st.spinner("Запрашиваю локальный OpenSERP..."):
+            try:
+                df = run_company_footprint_scan(
+                    brand=brand,
+                    industry=industry,
+                    region=region,
+                    queries=queries,
+                    engines=engines,
+                    limit=int(limit),
+                    lang=lang,
+                    region_code=region_code,
+                    timeout=int(timeout),
+                    base_url=base_url,
+                    mode=mode,
+                    extract=1 if extract_enabled else 0,
+                )
+                path = save_serp_results(df, brand=brand)
+                st.session_state[f"serp_df_{brand}"] = df
+                st.success(f"Поиск сохранён: {path}")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"OpenSERP не ответил или вернул ошибку: {exc}")
+
+    saved_path = Path("outputs/serp") / serp_slugify(brand) / "serp_results.csv"
+    current_df = st.session_state.get(f"serp_df_{brand}")
+    if current_df is None and saved_path.exists():
+        try:
+            current_df = pd.read_csv(saved_path, sep=CSV_SEP, encoding="utf-8-sig").fillna("")
+        except Exception:
+            current_df = None
+
+    if isinstance(current_df, pd.DataFrame) and not current_df.empty:
+        st.subheader("Кто всплыл в поиске")
+        serp_counts = serp_candidates_from_df(current_df, brand=brand)
+        if serp_counts:
+            st.dataframe(counts_to_frame(serp_counts), hide_index=True, use_container_width=True)
+        else:
+            st.info("Автоматически выделить бренды из выдачи пока не удалось. Проверь таблицу вручную.")
+
+        tasks = load_tasks()
+        answered = tasks[
+            (tasks["brand"].astype(str) == brand)
+            & tasks["answer"].fillna("").astype(str).str.strip().ne("")
+        ].copy()
+        if not answered.empty:
+            ai_counts = count_candidate_mentions(answered["answer"].astype(str).tolist(), brand=brand)
+            names = sorted(set(ai_counts) | set(serp_counts))
+            compare = pd.DataFrame([
+                {
+                    "кандидат": name,
+                    "AI ответы": ai_counts.get(name, 0),
+                    "поиск": serp_counts.get(name, 0),
+                }
+                for name in names
+            ]).sort_values(["AI ответы", "поиск", "кандидат"], ascending=[False, False, True])
+            st.subheader("Сравнение AI vs Search")
+            st.dataframe(compare, hide_index=True, use_container_width=True)
+        else:
+            st.info("Для сравнения AI vs Search сначала собери ответы в автокомбайне.")
+
+        st.subheader("SERP results")
+        visible_cols = ["query", "engine", "position", "title", "domain", "url", "snippet"]
+        st.dataframe(current_df[[col for col in visible_cols if col in current_df.columns]], hide_index=True, height=420, use_container_width=True)
+        st.caption(f"Файл: {saved_path}")
+
+
 def page_report() -> None:
     st.header("Отчёт")
     tasks = load_tasks()
@@ -562,13 +709,11 @@ def page_report() -> None:
     c4.metric("Видимость", summary["visibility_rate"])
 
     st.subheader("Кто всплыл в ответах")
-    surfaced_series = report_rows["кто всплыл в ответе"].str.split(", ").explode().replace("", pd.NA).dropna()
-    if surfaced_series.empty:
+    surfaced_counts = count_candidate_mentions(data["answer"].astype(str).tolist(), brand=brand)
+    if not surfaced_counts:
         st.info("Пока не удалось автоматически выделить названия компаний. Проверь ответы вручную.")
     else:
-        surfaced_counts = surfaced_series.value_counts().reset_index()
-        surfaced_counts.columns = ["компания / бренд-кандидат", "сколько раз встречается"]
-        st.dataframe(surfaced_counts, hide_index=True, use_container_width=True)
+        st.dataframe(counts_to_frame(surfaced_counts), hide_index=True, use_container_width=True)
 
     st.subheader("Сводка по заданным конкурентам")
     if "заданные конкуренты" in report_rows.columns:
@@ -626,7 +771,7 @@ def render_app() -> None:
     st.set_page_config(page_title="Searh-NEIRO", layout="wide")
     tasks = load_tasks()
     total, done, pending = task_progress(tasks)
-    pages = ["Поиск", "Компании", "Промпты", "Нейросети", "Автокомбайн", "Очередь", "По компаниям", "Отчёт"]
+    pages = ["Поиск", "Компании", "Промпты", "Нейросети", "Автокомбайн", "Очередь", "По компаниям", "Источники / Поиск", "Отчёт"]
     if "page" not in st.session_state:
         st.session_state["page"] = "Поиск"
     with st.sidebar:
@@ -656,6 +801,8 @@ def render_app() -> None:
         page_queue()
     elif page == "По компаниям":
         page_company_view()
+    elif page == "Источники / Поиск":
+        page_sources_search()
     else:
         page_report()
 
