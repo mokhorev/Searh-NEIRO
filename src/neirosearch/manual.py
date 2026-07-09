@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 from .models import ProviderResult
+from .task_status import STATUS_OK, STATUS_PENDING, TASK_STATUS_FIELDNAMES
 
 MANUAL_PROVIDERS = [
     "chatgpt_web",
@@ -32,6 +33,7 @@ TASK_FIELDNAMES = [
     "answer",
     "citations",
     "notes",
+    *TASK_STATUS_FIELDNAMES,
 ]
 
 EXCEL_DELIMITER = ";"
@@ -68,6 +70,7 @@ def write_manual_template(
                 "answer",
                 "citations",
                 "notes",
+                *TASK_STATUS_FIELDNAMES,
             ],
             delimiter=EXCEL_DELIMITER,
         )
@@ -84,6 +87,12 @@ def write_manual_template(
                         "answer": "",
                         "citations": "",
                         "notes": "",
+                        "status": STATUS_PENDING,
+                        "attempts": "0",
+                        "error": "",
+                        "last_run_at": "",
+                        "duration_sec": "",
+                        "run_id": "",
                     }
                 )
     return path
@@ -145,7 +154,7 @@ def write_companies_example(path: str | Path) -> Path:
                 "brand": "В отражении",
                 "industry": "сложное окрашивание волос",
                 "region": "Красноярск",
-                "competitors": "Салон 1,Салон 2",
+                "competitors": "",
             }
         )
     return out
@@ -186,6 +195,12 @@ def write_batch_manual_template(
                             "answer": "",
                             "citations": "",
                             "notes": "",
+                            "status": STATUS_PENDING,
+                            "attempts": "0",
+                            "error": "",
+                            "last_run_at": "",
+                            "duration_sec": "",
+                            "run_id": "",
                         }
                     )
     return path
