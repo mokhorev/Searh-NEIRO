@@ -129,6 +129,16 @@ COMMON_WINDOWS_BROWSERS = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
 ]
 
+# Short fragments that usually mean the model is still starting or UI text was captured.
+INCOMPLETE_MARKERS = [
+    "думаю",
+    "thinking",
+    "generating",
+    "ответ формируется",
+    "продолжить генерацию",
+    "continue generating",
+]
+
 
 @dataclass(slots=True)
 class BrowserRunResult:
@@ -323,7 +333,29 @@ def extract_answer(page: Any, provider_id: str) -> str:
     return ""
 
 
-def wait_for_answer(page: Any, provider_id: str, timeout_sec: int = 90) -> str:
+def looks_incomplete(text: str) -> bool:
+    value = text.casefold().strip()
+    if not value:
+        return True
+    if any(marker in value for marker in INCOMPLETE_MARKERS):
+        return True
+    # One very short line is usually a captured status/prompt, not a completed audit answer.
+    return len(value) < 120 and "\n" not in value
+
+
+def wait_for_answer(
+    page: Any,
+    provider_id: str,
+    timeout_sec: int = 240,
+    min_answer_chars: int = 300,
+    stable_rounds_required: int = 8,
+) -> str:
+    """Wait until answer text stops growing and is long enough for an audit prompt.
+
+    Earlier versions stopped after only a few stable reads. Some web LLMs render a short
+    placeholder first or append slowly, especially Qwen/Perplexity/GigaChat. This function
+    waits longer and avoids saving tiny incomplete snippets when the timeout allows it.
+    """
     started = time.time()
     last_text = ""
     stable_rounds = 0
@@ -334,7 +366,10 @@ def wait_for_answer(page: Any, provider_id: str, timeout_sec: int = 90) -> str:
             stable_rounds = 0
         elif text and text == last_text:
             stable_rounds += 1
-        if last_text and stable_rounds >= 4:
+
+        enough_text = len(last_text.strip()) >= min_answer_chars
+        stable_enough = stable_rounds >= stable_rounds_required
+        if last_text and enough_text and stable_enough and not looks_incomplete(last_text):
             return last_text
         time.sleep(2)
     return last_text
@@ -344,7 +379,7 @@ def run_pending_tasks(
     providers: list[str] | None = None,
     limit: int = 3,
     delay_sec: int = 8,
-    answer_timeout_sec: int = 90,
+    answer_timeout_sec: int = 240,
     profile_dir: Path = PROFILE_DIR,
     tasks_path: Path = TASKS_PATH,
     log_callback: Callable[[str], None] | None = None,
@@ -383,14 +418,15 @@ def run_pending_tasks(
                     result.failed += 1
                     result.add(f"{label}: не нашёл поле ввода. Проверь вход и селекторы, затем заполни вручную в очереди.")
                     continue
-                result.add(f"{label}: промпт отправлен, жду ответ.")
+                result.add(f"{label}: промпт отправлен, жду полный ответ до {answer_timeout_sec} сек.")
                 answer = wait_for_answer(page, provider_id, timeout_sec=answer_timeout_sec)
                 if answer:
                     df.at[idx, "answer"] = answer
                     df.at[idx, "notes"] = f"auto_browser; {time.strftime('%Y-%m-%d %H:%M:%S')}"
                     save_tasks(df, tasks_path)
                     result.saved += 1
-                    result.add(f"{label}: ответ сохранён, {len(answer)} символов.")
+                    short_note = "" if len(answer) >= 300 else " Возможно, ответ короткий — проверь вручную."
+                    result.add(f"{label}: ответ сохранён, {len(answer)} символов.{short_note}")
                 else:
                     result.failed += 1
                     result.add(f"{label}: ответ не удалось прочитать автоматически.")
@@ -398,5 +434,6 @@ def run_pending_tasks(
             except Exception as exc:  # noqa: BLE001
                 result.failed += 1
                 result.add(f"{label}: ошибка {exc}")
+        time.sleep(5)
         context.close()
     return result
