@@ -48,6 +48,15 @@ COMMON_INPUT_SELECTORS = [
 ]
 
 PROVIDER_INPUT_SELECTORS = {
+    "gemini_web": [
+        "rich-textarea div.ql-editor",
+        "div.ql-editor[contenteditable='true']",
+        "div[aria-label*='Enter a prompt']",
+        "div[aria-label*='Введите запрос']",
+        "div[contenteditable='true'][role='textbox']",
+        "[role='textbox']",
+        "textarea:not([disabled])",
+    ],
     "gigachat_web": [
         "textarea[placeholder*='Спрос']",
         "textarea[placeholder*='Напишите']",
@@ -63,6 +72,17 @@ PROVIDER_INPUT_SELECTORS = {
         "div[contenteditable='true'][data-lexical-editor='true']",
         "div[contenteditable='true']",
         "[role='textbox']",
+    ],
+    "grok_web": [
+        "textarea[placeholder*='Ask Grok']",
+        "textarea[placeholder*='Ask']",
+        "textarea[placeholder*='Спрос']",
+        "[data-testid*='composer'] textarea",
+        "[data-testid*='input'] textarea",
+        "div[contenteditable='true']",
+        "[contenteditable='true']",
+        "[role='textbox']",
+        "form textarea",
     ],
     "perplexity_web": [
         "textarea[placeholder*='Ask']",
@@ -87,6 +107,15 @@ COMMON_SEND_SELECTORS = [
 ]
 
 PROVIDER_SEND_SELECTORS = {
+    "gemini_web": [
+        "button[aria-label*='Send message']",
+        "button[aria-label*='Submit']",
+        "button[aria-label*='Отправить']",
+        "button[aria-label*='Отправ']",
+        "button.send-button",
+        "button[data-testid*='send']",
+        "button[type='submit']",
+    ],
     "gigachat_web": [
         "button[aria-label*='Отправ']",
         "button[aria-label*='отправ']",
@@ -94,6 +123,13 @@ PROVIDER_SEND_SELECTORS = {
         "button[data-testid*='send']",
         "button[class*='send']",
         "form button[type='submit']",
+        "button[type='submit']",
+    ],
+    "grok_web": [
+        "button[aria-label*='Submit']",
+        "button[aria-label*='Send']",
+        "button[aria-label*='Отправ']",
+        "button[data-testid*='send']",
         "button[type='submit']",
     ],
     "perplexity_web": [
@@ -111,7 +147,13 @@ ANSWER_SELECTORS = {
     "perplexity_web": ["[data-testid='answer']", "main article", ".prose", "main"],
     "deepseek_web": [".ds-markdown", ".markdown", "main"],
     "qwen_web": [".markdown", ".prose", "main"],
-    "gemini_web": ["message-content", ".markdown", "main"],
+    "gemini_web": [
+        "message-content",
+        "model-response",
+        ".model-response-text",
+        ".markdown",
+        "main",
+    ],
     "gigachat_web": [
         "[data-testid*='assistant']",
         "[class*='assistant']",
@@ -119,7 +161,13 @@ ANSWER_SELECTORS = {
         ".markdown",
         "main",
     ],
-    "grok_web": ["article", ".markdown", "main"],
+    "grok_web": [
+        "[data-testid*='message']",
+        "article",
+        ".markdown",
+        ".prose",
+        "main",
+    ],
 }
 
 COMMON_WINDOWS_BROWSERS = [
@@ -135,8 +183,8 @@ INCOMPLETE_MARKERS = [
     "thinking",
     "generating",
     "ответ формируется",
-    "продолжить генерацию",
     "continue generating",
+    "продолжить генерацию",
 ]
 
 
