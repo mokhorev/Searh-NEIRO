@@ -10,6 +10,12 @@ import streamlit as st
 # Works both as package entrypoint and as `streamlit run src\neirosearch\ui_app.py`.
 try:
     from .analyzer import analyze_answer, summarize_results
+    from .browser.combinator import (
+        PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
+        PROVIDER_URLS as BROWSER_PROVIDER_URLS,
+        open_login_pages,
+        run_pending_tasks,
+    )
     from .manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from .models import ProviderResult
     from .reports import write_all_reports
@@ -18,6 +24,12 @@ except ImportError:
     if str(root / "src") not in sys.path:
         sys.path.insert(0, str(root / "src"))
     from neirosearch.analyzer import analyze_answer, summarize_results
+    from neirosearch.browser.combinator import (
+        PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
+        PROVIDER_URLS as BROWSER_PROVIDER_URLS,
+        open_login_pages,
+        run_pending_tasks,
+    )
     from neirosearch.manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from neirosearch.models import ProviderResult
     from neirosearch.reports import write_all_reports
@@ -42,6 +54,7 @@ PROVIDER_LABELS = {
     "kimi_web": "Kimi",
     "glm_web": "GLM / Z.ai",
 }
+PROVIDER_LABELS.update(BROWSER_PROVIDER_LABELS)
 
 PROVIDER_URLS = {
     "chatgpt_web": "https://chatgpt.com/",
@@ -56,6 +69,9 @@ PROVIDER_URLS = {
     "kimi_web": "https://www.kimi.com/",
     "glm_web": "https://chat.z.ai/",
 }
+PROVIDER_URLS.update(BROWSER_PROVIDER_URLS)
+
+BROWSER_PROVIDERS = list(BROWSER_PROVIDER_URLS.keys())
 
 DEFAULT_PROMPTS = [
     "Кого посоветуешь для услуги: {industry} в городе {region}? Дай 5 вариантов.",
@@ -72,12 +88,17 @@ def ensure_files() -> None:
     Path("outputs").mkdir(exist_ok=True)
     if not COMPANIES_PATH.exists():
         pd.DataFrame([
-            {"brand": "В отражении", "industry": "сложное окрашивание волос", "region": "Красноярск", "competitors": "Салон 1,Салон 2"}
+            {
+                "brand": "В отражении",
+                "industry": "сложное окрашивание волос",
+                "region": "Красноярск",
+                "competitors": "Салон 1,Салон 2",
+            }
         ]).to_csv(COMPANIES_PATH, sep=CSV_SEP, index=False, encoding="utf-8-sig")
     if not PROMPTS_PATH.exists():
         PROMPTS_PATH.write_text("\n".join(DEFAULT_PROMPTS), encoding="utf-8")
     if not PROVIDERS_PATH.exists():
-        PROVIDERS_PATH.write_text("\n".join(["chatgpt_web", "gemini_web", "qwen_web", "gigachat_web", "perplexity_web", "deepseek_web", "grok_web"]), encoding="utf-8")
+        PROVIDERS_PATH.write_text("\n".join(BROWSER_PROVIDERS), encoding="utf-8")
 
 
 def read_csv_any(path: Path, columns: list[str]) -> pd.DataFrame:
@@ -123,7 +144,11 @@ def parse_prompts(text: str) -> list[str]:
 def load_provider_ids() -> list[str]:
     if not PROVIDERS_PATH.exists():
         return ["chatgpt_web", "gemini_web", "qwen_web", "gigachat_web", "perplexity_web"]
-    return [line.strip() for line in PROVIDERS_PATH.read_text(encoding="utf-8").splitlines() if line.strip() in MANUAL_PROVIDERS]
+    return [
+        line.strip()
+        for line in PROVIDERS_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() in MANUAL_PROVIDERS
+    ]
 
 
 def save_provider_ids(ids: list[str]) -> None:
@@ -189,7 +214,12 @@ def row_to_result(row: pd.Series) -> ProviderResult:
         ok=True,
         answer=str(row.get("answer", "")),
         citations=citations,
-        raw={"prompt_id": row.get("prompt_id", ""), "industry": row.get("industry", ""), "region": row.get("region", ""), "notes": row.get("notes", "")},
+        raw={
+            "prompt_id": row.get("prompt_id", ""),
+            "industry": row.get("industry", ""),
+            "region": row.get("region", ""),
+            "notes": row.get("notes", ""),
+        },
     )
 
 
@@ -208,15 +238,16 @@ def selected_company_frame(companies: pd.DataFrame, brand: str) -> pd.DataFrame:
     return companies[companies["brand"].astype(str) == brand].copy()
 
 
-def provider_multiselect(default_ids: list[str], key: str) -> list[str]:
-    labels = {pid: f"{PROVIDER_LABELS.get(pid, pid)} ({pid})" for pid in MANUAL_PROVIDERS}
+def provider_multiselect(default_ids: list[str], key: str, only_browser: bool = False) -> list[str]:
+    allowed = BROWSER_PROVIDERS if only_browser else MANUAL_PROVIDERS
+    labels = {pid: f"{PROVIDER_LABELS.get(pid, pid)} ({pid})" for pid in allowed}
     selected_labels = st.multiselect(
         "Какие нейросети использовать",
-        [labels[pid] for pid in MANUAL_PROVIDERS],
+        [labels[pid] for pid in allowed],
         default=[labels[pid] for pid in default_ids if pid in labels],
         key=key,
     )
-    return [pid for pid in MANUAL_PROVIDERS if labels[pid] in selected_labels]
+    return [pid for pid in allowed if labels[pid] in selected_labels]
 
 
 def page_search() -> None:
@@ -233,7 +264,6 @@ def page_search() -> None:
     if company.empty:
         st.warning("Компания не найдена.")
         return
-
     info = company.iloc[0]
     st.info(f"Ниша: {info['industry']} · Регион: {info['region']} · Конкуренты: {info['competitors']}")
 
@@ -249,7 +279,7 @@ def page_search() -> None:
     with col_a:
         replace_company_tasks = st.checkbox("Очистить старые задачи этой компании", value=True)
     with col_b:
-        st.write("После запуска переходи в «Очередь» — там будут все запросы по выбранным нейросетям.")
+        st.write("После запуска переходи в «Очередь» или «Автокомбайн».")
 
     if st.button("Запустить поиск", type="primary"):
         prompts = parse_prompts(prompts_text)
@@ -268,7 +298,7 @@ def page_search() -> None:
         all_tasks = pd.concat([old_tasks, new_tasks], ignore_index=True) if not old_tasks.empty else new_tasks
         save_tasks(all_tasks)
         st.success(f"Поиск создан: {len(new_tasks)} запросов для компании «{brand}».")
-        st.session_state["page"] = "Очередь"
+        st.session_state["page"] = "Автокомбайн"
         st.rerun()
 
 
@@ -295,7 +325,11 @@ def page_companies() -> None:
 
 def page_prompts() -> None:
     st.header("Промпты")
-    text = st.text_area("Один промпт на строку. Переменные: {brand}, {industry}, {region}.", value=load_prompts_text(), height=360)
+    text = st.text_area(
+        "Один промпт на строку. Переменные: {brand}, {industry}, {region}.",
+        value=load_prompts_text(),
+        height=360,
+    )
     if st.button("Сохранить промпты", type="primary"):
         save_prompts_text(text)
         st.success("Промпты сохранены")
@@ -317,6 +351,83 @@ def page_providers() -> None:
                 st.link_button(PROVIDER_LABELS.get(pid, pid), PROVIDER_URLS[pid])
 
 
+def page_browser() -> None:
+    st.header("Автокомбайн")
+    st.caption("Работает только через видимый локальный браузер и аккаунты пользователя. Капчи и авторизация не обходятся.")
+
+    tasks = load_tasks()
+    total, done, pending = task_progress(tasks)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Всего задач", total)
+    c2.metric("Ответов", done)
+    c3.metric("Осталось", pending)
+
+    default_auto = [pid for pid in load_provider_ids() if pid in BROWSER_PROVIDERS]
+    providers = provider_multiselect(default_auto, key="browser_providers", only_browser=True)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        limit = st.number_input("Лимит задач", min_value=1, max_value=100, value=1, step=1)
+    with col2:
+        delay = st.number_input("Задержка между запросами, сек", min_value=0, max_value=120, value=10, step=1)
+    with col3:
+        timeout = st.number_input("Таймаут ответа, сек", min_value=30, max_value=600, value=120, step=10)
+
+    login_seconds = st.number_input("Сколько держать окно входа открытым, сек", min_value=30, max_value=900, value=180, step=30)
+    log_box = st.empty()
+    live_logs: list[str] = []
+
+    def ui_log(message: str) -> None:
+        live_logs.append(message)
+        log_box.code("\n".join(live_logs[-80:]), language="text")
+
+    left, right = st.columns(2)
+    with left:
+        if st.button("Войти в нейросети", type="secondary"):
+            if not providers:
+                st.error("Выбери хотя бы одну нейросеть.")
+                return
+            with st.spinner("Открываю видимый браузер для входа..."):
+                try:
+                    open_login_pages(
+                        providers,
+                        wait_for_enter=False,
+                        keep_open_sec=int(login_seconds),
+                        log_callback=ui_log,
+                    )
+                    st.success("Окно входа закрыто, профиль сохранён.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Ошибка входа: {exc}")
+    with right:
+        if st.button("Запустить автокомбайн", type="primary"):
+            if not providers:
+                st.error("Выбери хотя бы одну нейросеть.")
+                return
+            with st.spinner("Автокомбайн выполняет очередь в видимом браузере..."):
+                try:
+                    result = run_pending_tasks(
+                        providers=providers,
+                        limit=int(limit),
+                        delay_sec=int(delay),
+                        answer_timeout_sec=int(timeout),
+                        log_callback=ui_log,
+                    )
+                    st.success(f"Готово. Обработано: {result.processed}, сохранено: {result.saved}, ошибок: {result.failed}.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Ошибка автокомбайна: {exc}")
+
+    with st.expander("Команды для ручной проверки"):
+        selected_arg = ",".join(providers) if providers else "qwen_web"
+        st.code(
+            "\n".join([
+                f'python -m neirosearch.browser_cli login --providers "{selected_arg}"',
+                f'python -m neirosearch.browser_cli run --providers "{selected_arg}" --limit {int(limit)} --delay {int(delay)} --timeout {int(timeout)}',
+                'python -m neirosearch.browser_cli run --providers "perplexity_web" --limit 1 --delay 10 --timeout 120',
+                'python -m neirosearch.browser_cli run --providers "gigachat_web" --limit 1 --delay 10 --timeout 120',
+            ]),
+            language="powershell",
+        )
+
+
 def page_queue() -> None:
     st.header("Очередь запросов")
     tasks = load_tasks()
@@ -329,17 +440,21 @@ def page_queue() -> None:
 
     pending_tasks = tasks[tasks["answer"].fillna("").astype(str).str.strip().eq("")]
     work_source = pending_tasks if not pending_tasks.empty else tasks
-    options = [f"{idx} | {row['brand']} | {row['provider_label']} | #{row['prompt_id']} | {str(row['prompt'])[:90]}" for idx, row in work_source.iterrows()]
+    options = [
+        f"{idx} | {row['brand']} | {row['provider_label']} | #{row['prompt_id']} | {str(row['prompt'])[:90]}"
+        for idx, row in work_source.iterrows()
+    ]
     selected = st.selectbox("Текущий запрос", options)
     idx = int(str(selected).split(" | ", 1)[0])
     row = tasks.loc[idx]
+    provider_id = str(row["provider_id"])
 
     left, right = st.columns([2, 1])
     with left:
         st.subheader(f"{row['brand']} → {row['provider_label']} → вопрос #{row['prompt_id']}")
     with right:
-        if row["provider_id"] in PROVIDER_URLS:
-            st.link_button(f"Открыть {row['provider_label']}", PROVIDER_URLS[str(row["provider_id"])])
+        if provider_id in PROVIDER_URLS:
+            st.link_button(f"Открыть {row['provider_label']}", PROVIDER_URLS[provider_id])
 
     st.text_area("Промпт для копирования", value=str(row["prompt"]), height=130, key=f"prompt_{idx}")
     answer = st.text_area("Вставь ответ нейросети", value=str(row.get("answer", "")), height=280, key=f"answer_{idx}")
@@ -381,6 +496,24 @@ def page_company_view() -> None:
     st.dataframe(data[["provider_label", "prompt_id", "prompt", "answer", "notes"]], hide_index=True, height=420, use_container_width=True)
 
 
+def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) -> pd.DataFrame:
+    rows = []
+    for _, row in data.iterrows():
+        analysis = analyze_answer(str(row["answer"]), brand, competitors)
+        rows.append({
+            "вопрос": int(row["prompt_id"]) if str(row["prompt_id"]).isdigit() else row["prompt_id"],
+            "нейросеть": row["provider_label"],
+            "бренд найден": "да" if analysis.brand_found else "нет",
+            "рекомендован": "да" if analysis.role == "recommended" else "нет",
+            "позиция": analysis.brand_position or "",
+            "роль": analysis.role,
+            "конкуренты": ", ".join(analysis.competitors_found),
+            "промпт": row["prompt"],
+            "ответ": row["answer"],
+        })
+    return pd.DataFrame(rows)
+
+
 def page_report() -> None:
     st.header("Отчёт")
     tasks = load_tasks()
@@ -389,21 +522,57 @@ def page_report() -> None:
         st.warning("Пока нет ответов.")
         return
     brand = st.selectbox("Компания", sorted(answered["brand"].dropna().astype(str).unique()))
-    data = answered[answered["brand"] == brand]
+    data = answered[answered["brand"] == brand].copy()
     competitors = split_competitors(str(data["competitors"].iloc[0] if not data.empty else ""))
     results = [row_to_result(row) for _, row in data.iterrows()]
     summary = summarize_results(results, brand=brand, competitors=competitors)
+    report_rows = build_report_rows(data, brand, competitors)
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Ответов", summary["ok_results"])
     c2.metric("Бренд найден", summary["brand_found"])
     c3.metric("Рекомендован", summary["brand_recommended"])
     c4.metric("Видимость", summary["visibility_rate"])
 
-    rows = []
-    for _, row in data.iterrows():
-        analysis = analyze_answer(str(row["answer"]), brand, competitors)
-        rows.append({"нейросеть": row["provider_label"], "вопрос": row["prompt_id"], "бренд найден": analysis.brand_found, "позиция": analysis.brand_position, "роль": analysis.role, "конкуренты": ", ".join(analysis.competitors_found), "промпт": row["prompt"], "ответ": row["answer"]})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, height=420, use_container_width=True)
+    st.subheader("Сводка по конкурентам")
+    competitor_series = report_rows["конкуренты"].str.split(", ").explode().replace("", pd.NA).dropna()
+    if competitor_series.empty:
+        st.info("Повторяющиеся конкуренты из заданного списка пока не найдены.")
+    else:
+        competitor_counts = competitor_series.value_counts().reset_index()
+        competitor_counts.columns = ["конкурент", "сколько раз встречается"]
+        st.dataframe(competitor_counts, hide_index=True, use_container_width=True)
+
+    st.subheader("Группировка по вопросу")
+    grouped = []
+    for (prompt_id, prompt), group in data.groupby(["prompt_id", "prompt"], sort=True):
+        rows_for_prompt = report_rows[report_rows["вопрос"].astype(str) == str(prompt_id)]
+        grouped.append({
+            "вопрос": prompt_id,
+            "промпт": prompt,
+            "ответов": len(group),
+            "где бренд найден": ", ".join(rows_for_prompt.loc[rows_for_prompt["бренд найден"] == "да", "нейросеть"].astype(str)),
+            "где бренд не найден": ", ".join(rows_for_prompt.loc[rows_for_prompt["бренд найден"] == "нет", "нейросеть"].astype(str)),
+            "где рекомендован": ", ".join(rows_for_prompt.loc[rows_for_prompt["рекомендован"] == "да", "нейросеть"].astype(str)),
+            "кого советуют вместо": ", ".join(sorted(set(", ".join(rows_for_prompt["конкуренты"].astype(str)).replace(", ,", ",").split(", ")) - {""})),
+        })
+    st.dataframe(pd.DataFrame(grouped), hide_index=True, height=260, use_container_width=True)
+
+    st.subheader("Сравнение ответов разных нейросетей")
+    for (prompt_id, prompt), group in data.groupby(["prompt_id", "prompt"], sort=True):
+        with st.expander(f"Вопрос #{prompt_id}: {prompt}"):
+            rows_for_prompt = report_rows[report_rows["вопрос"].astype(str) == str(prompt_id)]
+            st.dataframe(
+                rows_for_prompt[["нейросеть", "бренд найден", "рекомендован", "позиция", "роль", "конкуренты"]],
+                hide_index=True,
+                use_container_width=True,
+            )
+            for _, row in group.iterrows():
+                st.markdown(f"**{row['provider_label']}**")
+                st.write(str(row["answer"])[:4000])
+
+    st.subheader("Полная таблица")
+    st.dataframe(report_rows, hide_index=True, height=420, use_container_width=True)
 
     if st.button("Сформировать файлы отчёта", type="primary"):
         paths = write_all_reports(results, Path("outputs/ui_report") / slugify(brand), brand=brand, competitors=competitors)
@@ -417,7 +586,7 @@ def render_app() -> None:
     st.set_page_config(page_title="Searh-NEIRO", layout="wide")
     tasks = load_tasks()
     total, done, pending = task_progress(tasks)
-    pages = ["Поиск", "Компании", "Промпты", "Нейросети", "Очередь", "По компаниям", "Отчёт"]
+    pages = ["Поиск", "Компании", "Промпты", "Нейросети", "Автокомбайн", "Очередь", "По компаниям", "Отчёт"]
     if "page" not in st.session_state:
         st.session_state["page"] = "Поиск"
     with st.sidebar:
@@ -426,7 +595,12 @@ def render_app() -> None:
         st.metric("Всего", total)
         st.metric("Готово", done)
         st.metric("Осталось", pending)
-        page = st.radio("Раздел", pages, index=pages.index(st.session_state.get("page", "Поиск")), label_visibility="collapsed")
+        page = st.radio(
+            "Раздел",
+            pages,
+            index=pages.index(st.session_state.get("page", "Поиск")) if st.session_state.get("page", "Поиск") in pages else 0,
+            label_visibility="collapsed",
+        )
         st.session_state["page"] = page
     if page == "Поиск":
         page_search()
@@ -436,6 +610,8 @@ def render_app() -> None:
         page_prompts()
     elif page == "Нейросети":
         page_providers()
+    elif page == "Автокомбайн":
+        page_browser()
     elif page == "Очередь":
         page_queue()
     elif page == "По компаниям":
