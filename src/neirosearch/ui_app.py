@@ -117,7 +117,7 @@ def ensure_files() -> None:
                 "brand": "В отражении",
                 "industry": "сложное окрашивание волос",
                 "region": "Красноярск",
-                "competitors": "Салон 1,Салон 2",
+                "competitors": "",
             }
         ]).to_csv(COMPANIES_PATH, sep=CSV_SEP, index=False, encoding="utf-8-sig")
     if not PROMPTS_PATH.exists():
@@ -293,7 +293,14 @@ def page_search() -> None:
         st.warning("Компания не найдена.")
         return
     info = company.iloc[0]
-    st.info(f"Ниша: {info['industry']} · Регион: {info['region']} · Конкуренты: {info['competitors']}")
+    known_competitors = str(info.get("competitors", "")).strip()
+    st.info(f"Ниша: {info['industry']} · Регион: {info['region']}")
+    if known_competitors:
+        st.caption(
+            f"Контрольные конкуренты: {known_competitors}. Они нужны только для отдельной проверки известных конкурентов. Новых конкурентов система выделит из AI-ответов и поиска."
+        )
+    else:
+        st.caption("Контрольные конкуренты не заданы — система выделит кандидатов из AI-ответов и поиска автоматически.")
 
     prompts_text = st.text_area(
         "Промпты поиска — один промпт на строку",
@@ -332,7 +339,7 @@ def page_search() -> None:
 
 def page_companies() -> None:
     st.header("Компании")
-    st.caption("Одна строка — одна компания. Можно вставлять строки из Excel.")
+    st.caption("Одна строка — одна компания. Поле конкурентов необязательное: это только контрольный список известных конкурентов, а не источник автоматического анализа.")
     edited = st.data_editor(
         load_companies(),
         num_rows="dynamic",
@@ -343,7 +350,7 @@ def page_companies() -> None:
             "brand": st.column_config.TextColumn("Компания", required=True),
             "industry": st.column_config.TextColumn("Ниша / услуга"),
             "region": st.column_config.TextColumn("Город / регион"),
-            "competitors": st.column_config.TextColumn("Конкуренты через запятую"),
+            "competitors": st.column_config.TextColumn("Известные конкуренты через запятую (необязательно)"),
         },
     )
     if st.button("Сохранить компании", type="primary"):
@@ -564,7 +571,7 @@ def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) ->
             "рекомендован": "да" if analysis.role == "recommended" else "нет",
             "позиция": analysis.brand_position or "",
             "роль": analysis.role,
-            "заданные конкуренты": ", ".join(analysis.competitors_found),
+            "контрольные конкуренты": ", ".join(analysis.competitors_found),
             "кто всплыл в ответе": ", ".join(surfaced),
             "промпт": row["prompt"],
             "ответ": row["answer"],
@@ -715,16 +722,16 @@ def page_report() -> None:
     else:
         st.dataframe(counts_to_frame(surfaced_counts), hide_index=True, use_container_width=True)
 
-    st.subheader("Сводка по заданным конкурентам")
-    if "заданные конкуренты" in report_rows.columns:
-        competitor_series = report_rows["заданные конкуренты"].str.split(", ").explode().replace("", pd.NA).dropna()
+    st.subheader("Сводка по контрольным конкурентам")
+    if "контрольные конкуренты" in report_rows.columns:
+        competitor_series = report_rows["контрольные конкуренты"].str.split(", ").explode().replace("", pd.NA).dropna()
     else:
         competitor_series = pd.Series(dtype="object")
     if competitor_series.empty:
-        st.info("Повторяющиеся конкуренты из поля competitors пока не найдены.")
+        st.info("Контрольные конкуренты не заданы или не найдены. Основной блок для новых конкурентов — «Кто всплыл в ответах».")
     else:
         competitor_counts = competitor_series.value_counts().reset_index()
-        competitor_counts.columns = ["конкурент", "сколько раз встречается"]
+        competitor_counts.columns = ["контрольный конкурент", "сколько раз встречается"]
         st.dataframe(competitor_counts, hide_index=True, use_container_width=True)
 
     st.subheader("Группировка по вопросу")
