@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,28 +38,87 @@ PROVIDER_LABELS = {
     "grok_web": "Grok",
 }
 
-INPUT_SELECTORS = [
+COMMON_INPUT_SELECTORS = [
     "#prompt-textarea",
-    "textarea",
+    "textarea:not([disabled])",
     "div[contenteditable='true']",
+    "[contenteditable='true']",
     "[role='textbox']",
     "div.ProseMirror",
 ]
 
-SEND_SELECTORS = [
+PROVIDER_INPUT_SELECTORS = {
+    "gigachat_web": [
+        "textarea[placeholder*='Спрос']",
+        "textarea[placeholder*='Напишите']",
+        "textarea[placeholder*='Введите']",
+        "textarea[placeholder*='сообщение']",
+        "textarea[placeholder*='Сообщение']",
+        "[data-testid*='chat-input']",
+        "[data-testid*='textarea']",
+        "[data-testid*='prompt']",
+        "[class*='textarea'] textarea",
+        "[class*='input'] textarea",
+        "form textarea",
+        "div[contenteditable='true'][data-lexical-editor='true']",
+        "div[contenteditable='true']",
+        "[role='textbox']",
+    ],
+    "perplexity_web": [
+        "textarea[placeholder*='Ask']",
+        "textarea[placeholder*='Follow']",
+        "textarea[placeholder*='Спрос']",
+        "[data-testid='search-input']",
+        "[data-testid*='query']",
+        "[contenteditable='true']",
+        "[role='textbox']",
+        "form textarea",
+    ],
+}
+
+COMMON_SEND_SELECTORS = [
     "button[data-testid='send-button']",
     "button[aria-label*='Send']",
+    "button[aria-label*='send']",
     "button[aria-label*='Отправ']",
+    "button[title*='Send']",
+    "button[title*='Отправ']",
     "button[type='submit']",
 ]
 
+PROVIDER_SEND_SELECTORS = {
+    "gigachat_web": [
+        "button[aria-label*='Отправ']",
+        "button[aria-label*='отправ']",
+        "button[title*='Отправ']",
+        "button[data-testid*='send']",
+        "button[class*='send']",
+        "form button[type='submit']",
+        "button[type='submit']",
+    ],
+    "perplexity_web": [
+        "button[aria-label*='Submit']",
+        "button[aria-label*='Send']",
+        "button[data-testid*='submit']",
+        "button[data-testid*='send']",
+        "form button[type='submit']",
+        "button[type='submit']",
+    ],
+}
+
 ANSWER_SELECTORS = {
     "chatgpt_web": ["div[data-message-author-role='assistant']", "article"],
-    "perplexity_web": ["[data-testid='answer']", "main article", ".prose"],
+    "perplexity_web": ["[data-testid='answer']", "main article", ".prose", "main"],
     "deepseek_web": [".ds-markdown", ".markdown", "main"],
     "qwen_web": [".markdown", ".prose", "main"],
     "gemini_web": ["message-content", ".markdown", "main"],
-    "gigachat_web": [".markdown", ".message", "main"],
+    "gigachat_web": [
+        "[data-testid*='assistant']",
+        "[class*='assistant']",
+        "[class*='message']",
+        ".markdown",
+        "main",
+    ],
     "grok_web": ["article", ".markdown", "main"],
 }
 
@@ -75,12 +135,13 @@ class BrowserRunResult:
     processed: int = 0
     saved: int = 0
     failed: int = 0
-    logs: list[str] | None = None
+    logs: list[str] = field(default_factory=list)
+    log_callback: Callable[[str], None] | None = None
 
     def add(self, message: str) -> None:
-        if self.logs is None:
-            self.logs = []
         self.logs.append(message)
+        if self.log_callback:
+            self.log_callback(message)
 
 
 def require_playwright() -> None:
@@ -99,12 +160,7 @@ def find_local_browser() -> str | None:
 
 
 def launch_visible_context(playwright: Any, profile_dir: Path):
-    """Launch visible browser using installed Chrome/Edge first.
-
-    This avoids `playwright install chromium`, which can fail behind corporate or antivirus
-    certificate inspection. If no installed browser is found, it falls back to Playwright's bundled
-    browser and prints a clear error if that browser is missing.
-    """
+    """Launch visible Chrome/Edge first, then fall back to Playwright browsers."""
     profile_dir.mkdir(parents=True, exist_ok=True)
     executable = find_local_browser()
     common_args = [
@@ -118,27 +174,21 @@ def launch_visible_context(playwright: Any, profile_dir: Path):
             executable_path=executable,
             args=common_args,
         )
-    try:
-        return playwright.chromium.launch_persistent_context(
-            str(profile_dir),
-            headless=False,
-            channel="chrome",
-            args=common_args,
-        )
-    except Exception:
+    for channel in ("chrome", "msedge"):
         try:
             return playwright.chromium.launch_persistent_context(
                 str(profile_dir),
                 headless=False,
-                channel="msedge",
+                channel=channel,
                 args=common_args,
             )
         except Exception:
-            return playwright.chromium.launch_persistent_context(
-                str(profile_dir),
-                headless=False,
-                args=common_args,
-            )
+            continue
+    return playwright.chromium.launch_persistent_context(
+        str(profile_dir),
+        headless=False,
+        args=common_args,
+    )
 
 
 def read_tasks(path: Path = TASKS_PATH) -> pd.DataFrame:
@@ -172,8 +222,21 @@ def pending_task_indexes(df: pd.DataFrame, providers: list[str] | None = None) -
     return indexes
 
 
-def open_login_pages(providers: list[str], profile_dir: Path = PROFILE_DIR) -> None:
+def open_login_pages(
+    providers: list[str],
+    profile_dir: Path = PROFILE_DIR,
+    wait_for_enter: bool = True,
+    keep_open_sec: int = 180,
+    log_callback: Callable[[str], None] | None = None,
+) -> list[str]:
     require_playwright()
+    logs: list[str] = []
+
+    def log(message: str) -> None:
+        logs.append(message)
+        if log_callback:
+            log_callback(message)
+
     profile_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:  # type: ignore[operator]
         browser = launch_visible_context(p, profile_dir)
@@ -182,26 +245,44 @@ def open_login_pages(providers: list[str], profile_dir: Path = PROFILE_DIR) -> N
             if url:
                 page = browser.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        print("Войдите в нужные аккаунты в открытом браузере.")
-        input("Когда закончите вход, нажмите Enter здесь. Браузер будет закрыт, входы сохранятся в browser_profile. ")
+                log(f"Открыта страница входа: {PROVIDER_LABELS.get(provider, provider)}")
+        if wait_for_enter:
+            print("Войдите в нужные аккаунты в открытом браузере.")
+            input("Когда закончите вход, нажмите Enter здесь. Браузер будет закрыт, входы сохранятся в browser_profile. ")
+        else:
+            log(f"Окно входа открыто на {keep_open_sec} секунд. Войдите в аккаунты в видимом браузере.")
+            time.sleep(max(10, keep_open_sec))
         browser.close()
+        log("Браузер входа закрыт. Профиль сохранён в browser_profile.")
+    return logs
 
 
-def find_input(page: Any):
-    for selector in INPUT_SELECTORS:
+def selectors_for(provider_id: str, provider_map: dict[str, list[str]], common: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for selector in provider_map.get(provider_id, []) + common:
+        if selector not in seen:
+            result.append(selector)
+            seen.add(selector)
+    return result
+
+
+def find_input(page: Any, provider_id: str = ""):
+    for selector in selectors_for(provider_id, PROVIDER_INPUT_SELECTORS, COMMON_INPUT_SELECTORS):
         locator = page.locator(selector)
         try:
             if locator.count() > 0:
                 candidate = locator.last
                 candidate.wait_for(state="visible", timeout=5000)
-                return candidate
+                if candidate.is_enabled(timeout=1000):
+                    return candidate
         except Exception:
             continue
     return None
 
 
-def submit_prompt(page: Any, prompt: str) -> bool:
-    box = find_input(page)
+def submit_prompt(page: Any, prompt: str, provider_id: str = "") -> bool:
+    box = find_input(page, provider_id=provider_id)
     if box is None:
         return False
     box.click(timeout=5000)
@@ -210,11 +291,11 @@ def submit_prompt(page: Any, prompt: str) -> bool:
     except Exception:
         page.keyboard.press("Control+A")
         page.keyboard.insert_text(prompt)
-    time.sleep(0.5)
-    for selector in SEND_SELECTORS:
+    time.sleep(0.8)
+    for selector in selectors_for(provider_id, PROVIDER_SEND_SELECTORS, COMMON_SEND_SELECTORS):
         try:
             button = page.locator(selector).last
-            if button.count() > 0:
+            if button.count() > 0 and button.is_enabled(timeout=1000):
                 button.click(timeout=3000)
                 return True
         except Exception:
@@ -266,9 +347,10 @@ def run_pending_tasks(
     answer_timeout_sec: int = 90,
     profile_dir: Path = PROFILE_DIR,
     tasks_path: Path = TASKS_PATH,
+    log_callback: Callable[[str], None] | None = None,
 ) -> BrowserRunResult:
     require_playwright()
-    result = BrowserRunResult(logs=[])
+    result = BrowserRunResult(log_callback=log_callback)
     df = read_tasks(tasks_path)
     indexes = pending_task_indexes(df, providers=providers)
     if limit > 0:
@@ -295,11 +377,11 @@ def run_pending_tasks(
             try:
                 result.add(f"Открываю {label}: задача #{idx}.")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                time.sleep(3)
-                ok = submit_prompt(page, prompt)
+                time.sleep(4)
+                ok = submit_prompt(page, prompt, provider_id=provider_id)
                 if not ok:
                     result.failed += 1
-                    result.add(f"{label}: не нашёл поле ввода. Заполни вручную в очереди.")
+                    result.add(f"{label}: не нашёл поле ввода. Проверь вход и селекторы, затем заполни вручную в очереди.")
                     continue
                 result.add(f"{label}: промпт отправлен, жду ответ.")
                 answer = wait_for_answer(page, provider_id, timeout_sec=answer_timeout_sec)
