@@ -9,7 +9,7 @@ import streamlit as st
 
 # Works both as package entrypoint and as `streamlit run src\neirosearch\ui_app.py`.
 try:
-    from .analyzer import analyze_answer, summarize_results
+    from .analyzer import analyze_answer, extract_possible_company_names, summarize_results
     from .browser.combinator import (
         PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
         PROVIDER_URLS as BROWSER_PROVIDER_URLS,
@@ -23,7 +23,7 @@ except ImportError:
     root = Path(__file__).resolve().parents[2]
     if str(root / "src") not in sys.path:
         sys.path.insert(0, str(root / "src"))
-    from neirosearch.analyzer import analyze_answer, summarize_results
+    from neirosearch.analyzer import analyze_answer, extract_possible_company_names, summarize_results
     from neirosearch.browser.combinator import (
         PROVIDER_LABELS as BROWSER_PROVIDER_LABELS,
         PROVIDER_URLS as BROWSER_PROVIDER_URLS,
@@ -70,7 +70,6 @@ PROVIDER_URLS = {
     "glm_web": "https://chat.z.ai/",
 }
 PROVIDER_URLS.update(BROWSER_PROVIDER_URLS)
-
 BROWSER_PROVIDERS = list(BROWSER_PROVIDER_URLS.keys())
 
 DEFAULT_PROMPTS = [
@@ -354,6 +353,7 @@ def page_providers() -> None:
 def page_browser() -> None:
     st.header("Автокомбайн")
     st.caption("Работает только через видимый локальный браузер и аккаунты пользователя. Капчи и авторизация не обходятся.")
+    st.info("Для первичной проверки запускай по одной нейросети. Qwen, Perplexity и GigaChat лучше давать 300–360 секунд таймаута.")
 
     tasks = load_tasks()
     total, done, pending = task_progress(tasks)
@@ -368,11 +368,11 @@ def page_browser() -> None:
     with col1:
         limit = st.number_input("Лимит задач", min_value=1, max_value=100, value=1, step=1)
     with col2:
-        delay = st.number_input("Задержка между запросами, сек", min_value=0, max_value=120, value=10, step=1)
+        delay = st.number_input("Задержка между запросами, сек", min_value=0, max_value=120, value=15, step=1)
     with col3:
-        timeout = st.number_input("Таймаут ответа, сек", min_value=30, max_value=600, value=120, step=10)
+        timeout = st.number_input("Таймаут ответа, сек", min_value=30, max_value=600, value=300, step=10)
 
-    login_seconds = st.number_input("Сколько держать окно входа открытым, сек", min_value=30, max_value=900, value=180, step=30)
+    login_seconds = st.number_input("Сколько держать окно входа открытым, сек", min_value=30, max_value=1800, value=300, step=30)
     log_box = st.empty()
     live_logs: list[str] = []
 
@@ -421,8 +421,8 @@ def page_browser() -> None:
             "\n".join([
                 f'python -m neirosearch.browser_cli login --providers "{selected_arg}"',
                 f'python -m neirosearch.browser_cli run --providers "{selected_arg}" --limit {int(limit)} --delay {int(delay)} --timeout {int(timeout)}',
-                'python -m neirosearch.browser_cli run --providers "perplexity_web" --limit 1 --delay 10 --timeout 120',
-                'python -m neirosearch.browser_cli run --providers "gigachat_web" --limit 1 --delay 10 --timeout 120',
+                'python -m neirosearch.browser_cli run --providers "qwen_web" --limit 1 --delay 15 --timeout 360',
+                'python -m neirosearch.browser_cli run --providers "gigachat_web" --limit 1 --delay 15 --timeout 360',
             ]),
             language="powershell",
         )
@@ -438,8 +438,25 @@ def page_queue() -> None:
         st.warning("Очередь пустая. Открой раздел «Поиск» и нажми «Запустить поиск».")
         return
 
-    pending_tasks = tasks[tasks["answer"].fillna("").astype(str).str.strip().eq("")]
-    work_source = pending_tasks if not pending_tasks.empty else tasks
+    tasks = tasks.copy()
+    tasks["_has_answer"] = tasks["answer"].fillna("").astype(str).str.strip().ne("")
+    mode = st.radio(
+        "Показать задачи",
+        ["Незаполненные", "Готовые", "Все"],
+        horizontal=True,
+        key="queue_filter_mode",
+    )
+    if mode == "Незаполненные":
+        work_source = tasks[~tasks["_has_answer"]]
+    elif mode == "Готовые":
+        work_source = tasks[tasks["_has_answer"]]
+    else:
+        work_source = tasks
+
+    if work_source.empty:
+        st.info(f"Нет задач в режиме «{mode}».")
+        return
+
     options = [
         f"{idx} | {row['brand']} | {row['provider_label']} | #{row['prompt_id']} | {str(row['prompt'])[:90]}"
         for idx, row in work_source.iterrows()
@@ -451,30 +468,37 @@ def page_queue() -> None:
 
     left, right = st.columns([2, 1])
     with left:
-        st.subheader(f"{row['brand']} → {row['provider_label']} → вопрос #{row['prompt_id']}")
+        status = "готов" if bool(row["_has_answer"]) else "без ответа"
+        st.subheader(f"{row['brand']} → {row['provider_label']} → вопрос #{row['prompt_id']} ({status})")
     with right:
         if provider_id in PROVIDER_URLS:
             st.link_button(f"Открыть {row['provider_label']}", PROVIDER_URLS[provider_id])
 
     st.text_area("Промпт для копирования", value=str(row["prompt"]), height=130, key=f"prompt_{idx}")
-    answer = st.text_area("Вставь ответ нейросети", value=str(row.get("answer", "")), height=280, key=f"answer_{idx}")
+    answer = st.text_area("Вставь ответ нейросети", value=str(row.get("answer", "")), height=320, key=f"answer_{idx}")
     citations = st.text_input("Ссылки / цитаты через запятую", value=str(row.get("citations", "")), key=f"citations_{idx}")
     notes = st.text_input("Заметки", value=str(row.get("notes", "")), key=f"notes_{idx}")
 
     c1, c2 = st.columns([1, 3])
     with c1:
         if st.button("Сохранить ответ", type="primary"):
-            tasks.at[idx, "answer"] = answer
-            tasks.at[idx, "citations"] = citations
-            tasks.at[idx, "notes"] = notes
-            save_tasks(tasks)
+            clean_tasks = tasks.drop(columns=["_has_answer"], errors="ignore")
+            clean_tasks.at[idx, "answer"] = answer
+            clean_tasks.at[idx, "citations"] = citations
+            clean_tasks.at[idx, "notes"] = notes
+            save_tasks(clean_tasks)
             st.success("Ответ сохранён")
             st.rerun()
     with c2:
-        st.write("После сохранения автоматически откроется следующий незаполненный запрос.")
+        st.write("Фильтр «Готовые» позволяет быстро проверять уже сохранённые ответы автокомбайна.")
 
     st.divider()
-    st.dataframe(tasks[["brand", "provider_label", "prompt_id", "prompt", "answer"]], hide_index=True, height=260, use_container_width=True)
+    table = tasks.drop(columns=["_has_answer"], errors="ignore")
+    if mode == "Незаполненные":
+        table = table[table["answer"].fillna("").astype(str).str.strip().eq("")]
+    elif mode == "Готовые":
+        table = table[table["answer"].fillna("").astype(str).str.strip().ne("")]
+    st.dataframe(table[["brand", "provider_label", "prompt_id", "prompt", "answer", "notes"]], hide_index=True, height=280, use_container_width=True)
 
 
 def page_company_view() -> None:
@@ -499,7 +523,9 @@ def page_company_view() -> None:
 def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) -> pd.DataFrame:
     rows = []
     for _, row in data.iterrows():
-        analysis = analyze_answer(str(row["answer"]), brand, competitors)
+        answer = str(row["answer"])
+        analysis = analyze_answer(answer, brand, competitors)
+        surfaced = extract_possible_company_names(answer, brand=brand)
         rows.append({
             "вопрос": int(row["prompt_id"]) if str(row["prompt_id"]).isdigit() else row["prompt_id"],
             "нейросеть": row["provider_label"],
@@ -507,7 +533,8 @@ def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) ->
             "рекомендован": "да" if analysis.role == "recommended" else "нет",
             "позиция": analysis.brand_position or "",
             "роль": analysis.role,
-            "конкуренты": ", ".join(analysis.competitors_found),
+            "заданные конкуренты": ", ".join(analysis.competitors_found),
+            "кто всплыл в ответе": ", ".join(surfaced),
             "промпт": row["prompt"],
             "ответ": row["answer"],
         })
@@ -534,10 +561,22 @@ def page_report() -> None:
     c3.metric("Рекомендован", summary["brand_recommended"])
     c4.metric("Видимость", summary["visibility_rate"])
 
-    st.subheader("Сводка по конкурентам")
-    competitor_series = report_rows["конкуренты"].str.split(", ").explode().replace("", pd.NA).dropna()
+    st.subheader("Кто всплыл в ответах")
+    surfaced_series = report_rows["кто всплыл в ответе"].str.split(", ").explode().replace("", pd.NA).dropna()
+    if surfaced_series.empty:
+        st.info("Пока не удалось автоматически выделить названия компаний. Проверь ответы вручную.")
+    else:
+        surfaced_counts = surfaced_series.value_counts().reset_index()
+        surfaced_counts.columns = ["компания / бренд-кандидат", "сколько раз встречается"]
+        st.dataframe(surfaced_counts, hide_index=True, use_container_width=True)
+
+    st.subheader("Сводка по заданным конкурентам")
+    if "заданные конкуренты" in report_rows.columns:
+        competitor_series = report_rows["заданные конкуренты"].str.split(", ").explode().replace("", pd.NA).dropna()
+    else:
+        competitor_series = pd.Series(dtype="object")
     if competitor_series.empty:
-        st.info("Повторяющиеся конкуренты из заданного списка пока не найдены.")
+        st.info("Повторяющиеся конкуренты из поля competitors пока не найдены.")
     else:
         competitor_counts = competitor_series.value_counts().reset_index()
         competitor_counts.columns = ["конкурент", "сколько раз встречается"]
@@ -547,6 +586,7 @@ def page_report() -> None:
     grouped = []
     for (prompt_id, prompt), group in data.groupby(["prompt_id", "prompt"], sort=True):
         rows_for_prompt = report_rows[report_rows["вопрос"].astype(str) == str(prompt_id)]
+        surfaced_for_prompt = sorted(set(", ".join(rows_for_prompt["кто всплыл в ответе"].astype(str)).replace(", ,", ",").split(", ")) - {""})
         grouped.append({
             "вопрос": prompt_id,
             "промпт": prompt,
@@ -554,16 +594,16 @@ def page_report() -> None:
             "где бренд найден": ", ".join(rows_for_prompt.loc[rows_for_prompt["бренд найден"] == "да", "нейросеть"].astype(str)),
             "где бренд не найден": ", ".join(rows_for_prompt.loc[rows_for_prompt["бренд найден"] == "нет", "нейросеть"].astype(str)),
             "где рекомендован": ", ".join(rows_for_prompt.loc[rows_for_prompt["рекомендован"] == "да", "нейросеть"].astype(str)),
-            "кого советуют вместо": ", ".join(sorted(set(", ".join(rows_for_prompt["конкуренты"].astype(str)).replace(", ,", ",").split(", ")) - {""})),
+            "кого советуют вместо / кто всплыл": ", ".join(surfaced_for_prompt),
         })
-    st.dataframe(pd.DataFrame(grouped), hide_index=True, height=260, use_container_width=True)
+    st.dataframe(pd.DataFrame(grouped), hide_index=True, height=280, use_container_width=True)
 
     st.subheader("Сравнение ответов разных нейросетей")
     for (prompt_id, prompt), group in data.groupby(["prompt_id", "prompt"], sort=True):
         with st.expander(f"Вопрос #{prompt_id}: {prompt}"):
             rows_for_prompt = report_rows[report_rows["вопрос"].astype(str) == str(prompt_id)]
             st.dataframe(
-                rows_for_prompt[["нейросеть", "бренд найден", "рекомендован", "позиция", "роль", "конкуренты"]],
+                rows_for_prompt[["нейросеть", "бренд найден", "рекомендован", "позиция", "роль", "кто всплыл в ответе"]],
                 hide_index=True,
                 use_container_width=True,
             )
@@ -572,7 +612,7 @@ def page_report() -> None:
                 st.write(str(row["answer"])[:4000])
 
     st.subheader("Полная таблица")
-    st.dataframe(report_rows, hide_index=True, height=420, use_container_width=True)
+    st.dataframe(report_rows, hide_index=True, height=460, use_container_width=True)
 
     if st.button("Сформировать файлы отчёта", type="primary"):
         paths = write_all_reports(results, Path("outputs/ui_report") / slugify(brand), brand=brand, competitors=competitors)
