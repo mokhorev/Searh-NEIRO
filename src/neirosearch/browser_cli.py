@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from .browser.combinator import PROVIDER_LABELS, open_login_pages, run_pending_tasks
+from .browser.combinator import PROVIDER_LABELS, find_local_browser, open_login_pages, run_pending_tasks
 
 app = typer.Typer(help="Видимый браузерный автокомбайн Searh-NEIRO.")
 console = Console()
@@ -21,8 +21,13 @@ def parse_provider_ids(value: str) -> list[str]:
 
 @app.command("install")
 def install_browser() -> None:
-    """Install Playwright Chromium browser."""
-    console.print("[bold]Устанавливаю браузер Playwright Chromium...[/bold]")
+    """Legacy helper: install Playwright Chromium only if local Chrome/Edge is not found."""
+    local_browser = find_local_browser()
+    if local_browser:
+        console.print(f"[green]Найден локальный браузер:[/green] {local_browser}")
+        console.print("Playwright Chromium отдельно скачивать не нужно.")
+        return
+    console.print("[yellow]Локальный Chrome/Edge не найден. Пробую установить Playwright Chromium...[/yellow]")
     raise SystemExit(subprocess.call([sys.executable, "-m", "playwright", "install", "chromium"]))
 
 
