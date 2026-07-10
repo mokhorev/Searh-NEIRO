@@ -122,7 +122,7 @@ def write_answer_evidence(
     sources_file_hash = sha256_text(sources_text)
     metadata_file_hash = sha256_text(metadata_text)
     captured = CapturedAnswer(
-        answer_id=stable_id("answer", task.task_id, answer_hash),
+        answer_id=stable_id("answer", task.task_id),
         task_id=task.task_id,
         text=answer_text,
         citations=citations,
