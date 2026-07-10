@@ -3,7 +3,7 @@ from pathlib import Path
 from neirosearch.measurement import MeasurementStore, import_ui_tasks_csv
 
 
-def test_import_ui_tasks_and_evidence(tmp_path: Path) -> None:
+def test_import_ui_tasks_and_evidence_is_idempotent(tmp_path: Path) -> None:
     source = tmp_path / "ui_tasks.csv"
     source.write_text(
         "brand;industry;region;competitors;provider_id;provider_label;model;"
@@ -14,18 +14,27 @@ def test_import_ui_tasks_and_evidence(tmp_path: Path) -> None:
     )
     database = tmp_path / "measurement.db"
     evidence = tmp_path / "evidence"
-    stats = import_ui_tasks_csv(
+
+    first = import_ui_tasks_csv(
+        input_path=source,
+        database_path=database,
+        evidence_root=evidence,
+        run_prefix="test_run",
+    )
+    second = import_ui_tasks_csv(
         input_path=source,
         database_path=database,
         evidence_root=evidence,
         run_prefix="test_run",
     )
 
-    assert stats.companies == 1
-    assert stats.tasks == 1
-    assert stats.answers == 1
-    assert stats.evidence_items == 3
+    assert first.companies == 1
+    assert first.tasks == 1
+    assert first.answers == 1
+    assert first.evidence_items == 3
+    assert second.tasks == 1
     assert list(evidence.rglob("answer.md"))
+    assert len(list(evidence.rglob("answer.md"))) == 1
 
     with MeasurementStore(database) as store:
         store.initialize()
