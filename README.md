@@ -29,9 +29,9 @@ Every browser/manual result is an observation from a specific user session and d
 - visible-browser queue for selected services;
 - brand mention and recommendation heuristics;
 - competitor candidates;
-- JSONL, CSV and Markdown reports;
+- JSONL, Excel-safe CSV and Markdown reports;
 - optional OpenSERP search;
-- **Measurement Core v1:** SQLite runs/tasks, evidence hashes, structured observations and CSV import.
+- **Measurement Core v1:** SQLite runs/tasks, immutable evidence hashes, structured observations and CSV import.
 
 ## Install
 
@@ -77,7 +77,7 @@ neirosearch-measurement import-ui \
 neirosearch-measurement summary --db outputs/neirosearch.db
 ```
 
-See [docs/MEASUREMENT_CORE.md](docs/MEASUREMENT_CORE.md).
+See [docs/MEASUREMENT_CORE.md](docs/MEASUREMENT_CORE.md) and follow the staged [implementation checklist](docs/IMPLEMENTATION_CHECKLIST.md) before merging the new core into the main workflow.
 
 ## API audit
 
@@ -101,7 +101,7 @@ Strong conclusions require at least one of:
 - client confirmation;
 - a dated screenshot/export of the exact answer and query.
 
-Machine extraction is a candidate, not a fact. Measurement Core stores evidence spans and flags uncertain observations for manual review.
+Machine extraction is a candidate, not a fact. Measurement Core stores evidence spans and flags uncertain observations for manual review. Re-importing unchanged evidence is idempotent; changed content creates a new content-addressed capture rather than overwriting the prior artifact.
 
 ## Development priorities
 
@@ -111,7 +111,7 @@ Machine extraction is a candidate, not a fact. Measurement Core stores evidence 
 4. Repeatability aggregation and before/after reports.
 5. FREE_AI_SCOUT and MEMORY_ROAD only after paid workflow signals.
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/GITHUB_BENCHMARK.md](docs/GITHUB_BENCHMARK.md).
+See [docs/ROADMAP.md](docs/ROADMAP.md), [docs/GITHUB_BENCHMARK.md](docs/GITHUB_BENCHMARK.md) and [docs/DATA_GOVERNANCE.md](docs/DATA_GOVERNANCE.md).
 
 ## Safety and automation hygiene
 
