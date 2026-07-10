@@ -110,7 +110,7 @@ def write_answer_evidence(
         "captured_at": captured_at.isoformat(),
         "answer_sha256": answer_hash,
         "capture_sha256": capture_hash,
-        **extra_metadata,
+        "extra_metadata": extra_metadata,
     }
     metadata_text = json.dumps(metadata, ensure_ascii=False, indent=2, default=str) + "\n"
 
