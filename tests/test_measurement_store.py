@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from neirosearch.measurement import (
-    CaptureMode,
     CapturedAnswer,
+    CaptureMode,
     CompanyRecord,
     MeasurementRun,
     MeasurementStore,
