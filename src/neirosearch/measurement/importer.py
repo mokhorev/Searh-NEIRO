@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .evidence import write_answer_evidence
@@ -93,12 +92,13 @@ def import_ui_tasks_csv(
 ) -> ImportStats:
     source = Path(input_path)
     rows = read_rows(source)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_prefix = run_prefix or f"import_{source.stem}_{timestamp}"
+    run_prefix = run_prefix or f"import_{source.stem}"
     stats = ImportStats()
     seen_companies: set[str] = set()
     seen_runs: set[str] = set()
     seen_queries: set[str] = set()
+    runs_by_id: dict[str, MeasurementRun] = {}
+    run_has_pending: dict[str, bool] = {}
 
     with MeasurementStore(database_path) as store:
         store.initialize()
@@ -110,7 +110,9 @@ def import_ui_tasks_csv(
                 stats.skipped_rows += 1
                 continue
 
-            company_id = row.get("company_id", "").strip() or stable_id("company", brand)
+            company_id = row.get("company_id", "").strip() or stable_id(
+                "company", brand, row.get("region", ""), row.get("industry", "")
+            )
             run_id = row.get("run_id", "").strip() or stable_id(
                 "run", run_prefix, company_id
             )
@@ -170,6 +172,11 @@ def import_ui_tasks_csv(
                 metadata={"notes": row.get("notes", ""), "import_row": row_number},
             )
 
+            runs_by_id.setdefault(run_id, run)
+            run_has_pending[run_id] = run_has_pending.get(run_id, False) or not bool(
+                answer_text
+            )
+
             store.upsert_company(company)
             store.upsert_run(run)
             store.upsert_query(query)
@@ -220,5 +227,14 @@ def import_ui_tasks_csv(
             stats.answers += 1
             stats.evidence_items += len(evidence_items)
             stats.observations += 1
+
+        for run_id, run in runs_by_id.items():
+            if run_has_pending.get(run_id, False):
+                run.status = TaskStatus.RUNNING
+                run.completed_at = None
+            else:
+                run.status = TaskStatus.CAPTURED
+                run.completed_at = utc_now()
+            store.upsert_run(run)
         store.commit()
     return stats
