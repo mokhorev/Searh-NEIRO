@@ -1,35 +1,48 @@
-# Searh-NEIRO
+# Search-NEIRO
 
-**Searh-NEIRO** — инструмент для проверки, какие нейросети рекомендуют компанию, бренд, товар или услугу.
+> Repository and Python distribution currently keep the legacy spelling `Searh-NEIRO` / `searh-neiro` for compatibility. New technical and client-facing documentation uses **Search-NEIRO**.
 
-Проект помогает делать аудит AI-видимости для России и глобальных AI-сервисов, включая провайдеров, которыми часто пользуются из РФ напрямую или через VPN: OpenAI/ChatGPT, Google Gemini, Qwen, DeepSeek, GigaChat, YandexGPT, Claude, Perplexity, xAI Grok, Mistral, Groq, OpenRouter, Together, Fireworks, Ollama и LM Studio.
+Search-NEIRO is an internal tool for **НейроВижин** audits. It models live customer questions such as “кого выбрать”, “где заказать” and “к кому обратиться”, records what AI systems answer, identifies competitors and evidence gaps, and supports a repeat measurement after source repair.
 
-> Важно: проект использует официальные API и локальные модели. Он не парсит закрытые веб-интерфейсы ChatGPT/Gemini/Claude/GigaChat и не обходит авторизацию сервисов.
+It does **not** sell or guarantee placement in ChatGPT, Алиса, search engines or maps.
 
-## Что делает
+## Operating modes
 
-- прогоняет один и тот же набор промптов по нескольким нейросетям;
-- проверяет, найден ли бренд в ответе;
-- определяет примерную позицию бренда в ответе;
-- ищет упоминания конкурентов;
-- сохраняет отчёты в JSONL, CSV и Markdown;
-- опционально использует OpenSERP как поисковый слой для свежих источников;
-- поддерживает no-key режим через ручной CSV-опрос веб-версий нейросетей.
+### 1. Official API / local model mode
 
-## Установка
+Uses configured APIs or local OpenAI-compatible endpoints. Provider definitions live in `config/providers.yaml`.
+
+### 2. Manual web mode
+
+Generates a CSV task list. A user opens each AI service, submits the prompt, and pastes the answer and visible sources back into the table.
+
+### 3. Assisted browser mode
+
+Uses a visible local Chrome/Edge profile and the user's own sessions to reduce repetitive work. This mode is UI-fragile and must be used in small volumes. It does not bypass login, captcha or service limits.
+
+Every browser/manual result is an observation from a specific user session and date, not official platform statistics.
+
+## Current capabilities
+
+- query bank generation and batch/manual workflows;
+- API and local-provider adapters;
+- visible-browser queue for selected services;
+- brand mention and recommendation heuristics;
+- competitor candidates;
+- JSONL, CSV and Markdown reports;
+- optional OpenSERP search;
+- **Measurement Core v1:** SQLite runs/tasks, evidence hashes, structured observations and CSV import.
+
+## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -e .
+pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Заполни `.env` ключами нужных провайдеров. Если ключей нет, используй ручной режим ниже.
-
-## Если API-ключей нет
-
-Сгенерируй таблицу промптов:
+## Existing workflow without API keys
 
 ```bash
 neirosearch manual-template \
@@ -39,9 +52,7 @@ neirosearch manual-template \
   --output outputs/manual_prompts.csv
 ```
 
-Открой CSV, вставь каждый промпт в веб-версии ChatGPT/Gemini/Qwen/GigaChat/Claude/Perplexity/DeepSeek/Grok, затем вставь ответы в колонку `answer`.
-
-Потом собери отчёт:
+Fill `answer`, `citations` and `notes`, then:
 
 ```bash
 neirosearch manual-import \
@@ -51,15 +62,24 @@ neirosearch manual-import \
   --output outputs/manual_report
 ```
 
-Подробно: `docs/NO_API_KEYS.md`.
+## Measurement Core v1
 
-## Проверить готовность провайдеров
+The current Streamlit CSV workflow remains intact. Import completed rows into a local evidence database:
 
 ```bash
-neirosearch providers
+neirosearch-measurement init --db outputs/neirosearch.db
+
+neirosearch-measurement import-ui \
+  --input outputs/ui_tasks.csv \
+  --db outputs/neirosearch.db \
+  --evidence-root outputs/evidence
+
+neirosearch-measurement summary --db outputs/neirosearch.db
 ```
 
-## Запуск аудита через API
+See [docs/MEASUREMENT_CORE.md](docs/MEASUREMENT_CORE.md).
+
+## API audit
 
 ```bash
 neirosearch run \
@@ -71,55 +91,47 @@ neirosearch run \
   --output outputs/moscow-repair
 ```
 
-После запуска появятся:
+## Evidence and trust
 
-- `outputs/.../results.jsonl` — полный машинный лог;
-- `outputs/.../summary.csv` — таблица для Excel/Google Sheets;
-- `outputs/.../report.md` — текстовый отчёт.
+Strong conclusions require at least one of:
 
-## OpenSERP-поиск
+- repetition across systems;
+- repetition across attempts;
+- a verifiable source;
+- client confirmation;
+- a dated screenshot/export of the exact answer and query.
 
-Если локально поднят OpenSERP:
+Machine extraction is a candidate, not a fact. Measurement Core stores evidence spans and flags uncertain observations for manual review.
 
-```bash
-neirosearch search "лучшие компании по ремонту квартир Москва" \
-  --engines yandex,bing,duckduckgo,google \
-  --limit 10 \
-  --lang RU \
-  --region RU
-```
+## Development priorities
 
-## Поддерживаемые типы провайдеров
+1. Measurement Core and immutable evidence.
+2. UI integration, resumable tasks and explicit error states.
+3. A human-labeled answer dataset and regression tests.
+4. Repeatability aggregation and before/after reports.
+5. FREE_AI_SCOUT and MEMORY_ROAD only after paid workflow signals.
 
-### OpenAI-compatible
+See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/GITHUB_BENCHMARK.md](docs/GITHUB_BENCHMARK.md).
 
-Один универсальный адаптер для:
+## Safety and automation hygiene
 
-- OpenAI / ChatGPT API;
-- Google Gemini OpenAI-compatible endpoint;
-- Qwen / Alibaba Cloud Model Studio / DashScope;
-- DeepSeek;
-- xAI Grok;
-- Mistral;
-- Groq;
-- OpenRouter;
-- Together AI;
-- Fireworks AI;
-- LM Studio;
-- любые свои OpenAI-compatible proxy/vLLM/LiteLLM endpoints.
+Allowed:
 
-### Отдельные адаптеры
+- small-volume user-initiated runs;
+- personal sessions;
+- answer/screenshot export;
+- date, Web mode, geo and session logging;
+- local queues and evidence storage.
 
-- GigaChat — OAuth token + `/chat/completions`;
-- YandexGPT — Yandex AI Studio Completion API;
-- Claude — Anthropic Messages API;
-- Perplexity — Sonar API;
-- Ollama — локальные модели.
+Not allowed in this project:
 
-## Конфигурация
+- captcha bypass or solving;
+- proxy pools or account farming;
+- hidden form submissions;
+- aggressive scraping;
+- spam, fake reviews or fake accounts;
+- autonomous publication or external actions without explicit approval.
 
-Провайдеры описаны в `config/providers.yaml`. Можно добавлять новые OpenAI-compatible сервисы без изменения кода: достаточно указать `base_url`, `model` и переменную окружения для ключа.
+## License
 
-## Юридически и технически
-
-Используй официальные API, свои ключи и соблюдай правила провайдеров. VPN может быть нужен для доступа к некоторым сервисам, но проект не содержит механизмов обхода ограничений, капч или авторизации.
+MIT.
