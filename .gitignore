@@ -8,6 +8,16 @@ __pycache__/
 outputs/
 reports/
 browser_profile/
+client_data/
+local_data/
+evidence/
+*.db
+*.sqlite
+*.sqlite3
+*.mhtml
+*.har
 .DS_Store
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
