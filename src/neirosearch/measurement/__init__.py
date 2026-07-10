@@ -3,8 +3,8 @@
 from .importer import ImportStats, import_ui_tasks_csv
 from .models import (
     AnswerObservation,
-    CaptureMode,
     CapturedAnswer,
+    CaptureMode,
     CompanyRecord,
     ErrorCode,
     EvidenceItem,
