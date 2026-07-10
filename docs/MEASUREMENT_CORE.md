@@ -34,12 +34,15 @@ outputs/evidence/
       <provider_id>/
         <query_id>/
           attempt_01/
-            answer.md
-            sources.json
-            metadata.json
+            capture_<hash>/
+              answer.md
+              sources.json
+              metadata.json
 ```
 
-Every answer is hashed with SHA-256. `metadata.json` records the prompt, provider, attempt, capture mode, Web mode, geo and session information available at import time.
+The capture hash covers the answer, citations and import metadata. Re-importing the same row is idempotent; changed content creates a new capture directory instead of overwriting prior evidence.
+
+Every answer and evidence file is hashed with SHA-256. `metadata.json` records the prompt, provider, attempt, capture mode, Web mode, geo and session information available at import time.
 
 ## Database tables
 
