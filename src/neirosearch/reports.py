@@ -19,7 +19,7 @@ def ensure_output_dir(path: str | Path) -> Path:
 
 
 def excel_safe_text(value: object) -> str:
-    """Prevent CSV/Excel formula execution while preserving the visible text."""
+    """Prevent CSV/Excel formula execution while preserving visible text."""
     if value is None:
         return ""
     text = str(value)
@@ -50,6 +50,8 @@ def write_csv(
         "model",
         "ok",
         "brand_found",
+        "brand_in_prompt",
+        "organic_brand_found",
         "brand_position",
         "role",
         "competitors_found",
@@ -72,6 +74,8 @@ def write_csv(
                     "model": excel_safe_text(result.model),
                     "ok": result.ok,
                     "brand_found": analysis.get("brand_found") if analysis else "",
+                    "brand_in_prompt": record.get("brand_in_prompt", ""),
+                    "organic_brand_found": record.get("organic_brand_found", ""),
                     "brand_position": analysis.get("brand_position") if analysis else "",
                     "role": excel_safe_text(analysis.get("role")) if analysis else "",
                     "competitors_found": excel_safe_text(
@@ -80,7 +84,7 @@ def write_csv(
                     "latency_ms": result.latency_ms,
                     "error": excel_safe_text(result.error or ""),
                     "prompt": excel_safe_text(result.prompt),
-                    "answer": excel_safe_text(result.answer),
+                    "answer": excel_safe_text(record.get("answer", "")),
                     "citations": excel_safe_text(", ".join(result.citations)),
                 }
             )
@@ -98,8 +102,11 @@ def write_markdown(
         f"- Total answers: {summary['total_results']}",
         f"- Successful answers: {summary['ok_results']}",
         f"- Brand found: {summary['brand_found']}",
+        f"- Brand found organically: {summary['organic_brand_found']} / "
+        f"{summary['organic_results']}",
         f"- Brand recommended: {summary['brand_recommended']}",
         f"- Visibility rate: {summary['visibility_rate']}",
+        f"- Organic visibility rate: {summary['organic_visibility_rate']}",
         f"- Recommendation rate: {summary['recommendation_rate']}",
         "",
         "## Answers",
@@ -123,14 +130,17 @@ def write_markdown(
             lines.extend(
                 [
                     f"**Brand found:** {analysis['brand_found']}",
+                    f"**Brand in prompt:** {record['brand_in_prompt']}",
+                    f"**Organic brand found:** {record['organic_brand_found']}",
                     f"**Brand position:** {analysis['brand_position']}",
                     f"**Role:** {analysis['role']}",
-                    f"**Competitors found:** {', '.join(analysis['competitors_found']) or '-'}",
+                    f"**Competitors found:** "
+                    f"{', '.join(analysis['competitors_found']) or '-'}",
                 ]
             )
         if result.citations:
             lines.append(f"**Citations:** {', '.join(result.citations)}")
-        lines.extend(["", "**Answer:**", "", result.answer or "_No answer_", ""])
+        lines.extend(["", "**Answer:**", "", record.get("answer") or "_No answer_", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
