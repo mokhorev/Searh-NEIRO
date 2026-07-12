@@ -29,8 +29,10 @@ try:
 except Exception:  # pragma: no cover - handled at runtime
     sync_playwright = None  # type: ignore[assignment]
 
-TASKS_PATH = Path("outputs/ui_tasks.csv")
-PROFILE_DIR = Path("browser_profile")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+TASKS_PATH = PROJECT_ROOT / "outputs" / "ui_tasks.csv"
+LOGS_DIR = PROJECT_ROOT / "outputs" / "logs"
+PROFILE_DIR = PROJECT_ROOT / "browser_profile"
 CSV_SEP = ";"
 
 PROVIDER_URLS = {
@@ -266,10 +268,72 @@ def pending_task_indexes(df: pd.DataFrame, providers: list[str] | None = None) -
         if providers_set and provider_id not in providers_set:
             continue
         status = status_for_row(row)
-        if status == STATUS_OK:
+        if status not in {STATUS_PENDING, STATUS_RETRY}:
             continue
         indexes.append(int(idx))
     return indexes
+
+
+def pending_task_diagnostics(
+    df: pd.DataFrame,
+    providers: list[str] | None = None,
+    tasks_path: Path = TASKS_PATH,
+) -> list[str]:
+    """Explain why no tasks are runnable without hiding the queue location."""
+    path = tasks_path.resolve()
+    if not tasks_path.exists():
+        return [
+            f"Файл очереди не найден: {path}",
+            "Создай задачи в разделе «Поиск» основного интерфейса.",
+        ]
+    if df.empty:
+        return [f"Файл очереди пуст: {path}", "Создай очередь заново в разделе «Поиск»."]
+
+    work = ensure_task_status_columns(df)
+    requested = set(providers or [])
+    unsupported_requested = sorted(requested - set(PROVIDER_URLS))
+    messages: list[str] = [f"Файл очереди: {path}"]
+    if unsupported_requested:
+        messages.append(f"Не поддерживаются автокомбайном: {', '.join(unsupported_requested)}.")
+    if "provider_id" not in work.columns:
+        messages.append("В очереди отсутствует обязательный столбец provider_id.")
+        return messages
+
+    provider_ids = work["provider_id"].astype(str).str.strip()
+    selected_provider_ids = requested & set(PROVIDER_URLS) if requested else set(PROVIDER_URLS)
+    selected = work[provider_ids.isin(selected_provider_ids)]
+    if selected.empty:
+        available = sorted({value for value in provider_ids if value})
+        requested_text = ", ".join(sorted(requested)) if requested else "поддерживаемых провайдеров"
+        messages.append(f"В очереди нет задач для: {requested_text}.")
+        if available:
+            messages.append(f"Провайдеры в очереди: {', '.join(available)}.")
+        return messages
+
+    selected = ensure_task_status_columns(selected)
+    answered = int(selected["answer"].astype(str).str.strip().ne("").sum())
+    pending = int((selected["status"] == STATUS_PENDING).sum())
+    retry = int((selected["status"] == STATUS_RETRY).sum())
+    running = int((selected["status"] == STATUS_RUNNING).sum())
+    other = len(selected) - answered - pending - retry - running
+    messages.append(
+        "Для выбранных провайдеров: "
+        f"всего {len(selected)}, готово {answered}, pending {pending}, retry {retry}, "
+        f"running {running}, прочие статусы {max(0, other)}."
+    )
+    if pending or retry:
+        messages.append(
+            "Задачи pending/retry есть, но они не прошли фильтры запуска; "
+            "проверь provider_id и данные промпта."
+        )
+    elif answered == len(selected):
+        messages.append("Все задачи выбранных провайдеров уже имеют ответы.")
+    else:
+        messages.append(
+            "Нет задач со статусом pending или retry. "
+            "Running, error и skipped автоматически не запускаются."
+        )
+    return messages
 
 
 def open_login_pages(
@@ -445,8 +509,7 @@ def run_pending_tasks(
     tasks_path: Path = TASKS_PATH,
     log_callback: Callable[[str], None] | None = None,
 ) -> BrowserRunResult:
-    require_playwright()
-    run_id, log_path = create_run_log_path()
+    run_id, log_path = create_run_log_path(LOGS_DIR)
     result = BrowserRunResult(log_callback=log_callback, run_id=run_id, log_path=log_path)
     result.add(f"Старт автокомбайна: run_id={run_id}")
     df = read_tasks(tasks_path)
@@ -454,9 +517,12 @@ def run_pending_tasks(
     if limit > 0:
         indexes = indexes[:limit]
     if not indexes:
-        result.add("Нет незаполненных задач для выбранных нейросетей.")
+        result.add("Нет задач, готовых к запуску.")
+        for message in pending_task_diagnostics(df, providers=providers, tasks_path=tasks_path):
+            result.add(message)
         return result
 
+    require_playwright()
     result.add(f"В очереди к запуску: {len(indexes)} задач. Лог: {log_path}")
     profile_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:  # type: ignore[operator]

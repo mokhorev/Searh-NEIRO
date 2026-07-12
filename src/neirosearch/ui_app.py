@@ -11,8 +11,10 @@ import streamlit as st
 try:
     from .analyzer import (
         analyze_answer,
+        clean_answer_for_report,
         count_candidate_mentions,
         extract_possible_company_names,
+        prompt_mentions_brand,
         summarize_results,
     )
     from .browser.combinator import (
@@ -32,14 +34,17 @@ try:
         slugify as serp_slugify,
     )
     from .reports import write_all_reports
+    from .statistics_view import render_statistics_page
 except ImportError:
     root = Path(__file__).resolve().parents[2]
     if str(root / "src") not in sys.path:
         sys.path.insert(0, str(root / "src"))
     from neirosearch.analyzer import (
         analyze_answer,
+        clean_answer_for_report,
         count_candidate_mentions,
         extract_possible_company_names,
+        prompt_mentions_brand,
         summarize_results,
     )
     from neirosearch.browser.combinator import (
@@ -59,12 +64,16 @@ except ImportError:
         slugify as serp_slugify,
     )
     from neirosearch.reports import write_all_reports
+    from neirosearch.statistics_view import render_statistics_page
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INPUTS_DIR = PROJECT_ROOT / "inputs"
+OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 COMPANY_COLS = ["brand", "industry", "region", "competitors"]
-TASKS_PATH = Path("outputs/ui_tasks.csv")
-COMPANIES_PATH = Path("inputs/companies.csv")
-PROMPTS_PATH = Path("inputs/prompts.txt")
-PROVIDERS_PATH = Path("inputs/providers.txt")
+TASKS_PATH = OUTPUTS_DIR / "ui_tasks.csv"
+COMPANIES_PATH = INPUTS_DIR / "companies.csv"
+PROMPTS_PATH = INPUTS_DIR / "prompts.txt"
+PROVIDERS_PATH = INPUTS_DIR / "providers.txt"
 CSV_SEP = ";"
 
 PROVIDER_LABELS = {
@@ -109,8 +118,8 @@ DEFAULT_PROMPTS = [
 
 
 def ensure_files() -> None:
-    Path("inputs").mkdir(exist_ok=True)
-    Path("outputs").mkdir(exist_ok=True)
+    INPUTS_DIR.mkdir(exist_ok=True)
+    OUTPUTS_DIR.mkdir(exist_ok=True)
     if not COMPANIES_PATH.exists():
         pd.DataFrame([
             {
@@ -561,13 +570,17 @@ def page_company_view() -> None:
 def build_report_rows(data: pd.DataFrame, brand: str, competitors: list[str]) -> pd.DataFrame:
     rows = []
     for _, row in data.iterrows():
-        answer = str(row["answer"])
+        answer = clean_answer_for_report(str(row["answer"]))
         analysis = analyze_answer(answer, brand, competitors)
         surfaced = extract_possible_company_names(answer, brand=brand)
         rows.append({
             "вопрос": int(row["prompt_id"]) if str(row["prompt_id"]).isdigit() else row["prompt_id"],
             "нейросеть": row["provider_label"],
             "бренд найден": "да" if analysis.brand_found else "нет",
+            "бренд в промпте": "да" if prompt_mentions_brand(str(row["prompt"]), brand) else "нет",
+            "органически найден": "да"
+            if analysis.brand_found and not prompt_mentions_brand(str(row["prompt"]), brand)
+            else "нет",
             "рекомендован": "да" if analysis.role == "recommended" else "нет",
             "позиция": analysis.brand_position or "",
             "роль": analysis.role,
@@ -646,13 +659,13 @@ def page_sources_search() -> None:
                     mode=mode,
                     extract=1 if extract_enabled else 0,
                 )
-                path = save_serp_results(df, brand=brand)
+                path = save_serp_results(df, brand=brand, output_root=OUTPUTS_DIR / "serp")
                 st.session_state[f"serp_df_{brand}"] = df
                 st.success(f"Поиск сохранён: {path}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"OpenSERP не ответил или вернул ошибку: {exc}")
 
-    saved_path = Path("outputs/serp") / serp_slugify(brand) / "serp_results.csv"
+    saved_path = OUTPUTS_DIR / "serp" / serp_slugify(brand) / "serp_results.csv"
     current_df = st.session_state.get(f"serp_df_{brand}")
     if current_df is None and saved_path.exists():
         try:
@@ -709,11 +722,17 @@ def page_report() -> None:
     summary = summarize_results(results, brand=brand, competitors=competitors)
     report_rows = build_report_rows(data, brand, competitors)
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Ответов", summary["ok_results"])
     c2.metric("Бренд найден", summary["brand_found"])
     c3.metric("Рекомендован", summary["brand_recommended"])
     c4.metric("Видимость", summary["visibility_rate"])
+    c5.metric("Органическая видимость", summary["organic_visibility_rate"])
+    st.info(
+        f"Без подсказки бренда: найден в {summary['organic_brand_found']} "
+        f"из {summary['organic_results']} ответов. "
+        "Это основной показатель самостоятельной видимости AI."
+    )
 
     st.subheader("Кто всплыл в ответах")
     surfaced_counts = count_candidate_mentions(data["answer"].astype(str).tolist(), brand=brand)
@@ -767,7 +786,12 @@ def page_report() -> None:
     st.dataframe(report_rows, hide_index=True, height=460, use_container_width=True)
 
     if st.button("Сформировать файлы отчёта", type="primary"):
-        paths = write_all_reports(results, Path("outputs/ui_report") / slugify(brand), brand=brand, competitors=competitors)
+        paths = write_all_reports(
+            results,
+            OUTPUTS_DIR / "ui_report" / slugify(brand),
+            brand=brand,
+            competitors=competitors,
+        )
         st.success("Отчёт сформирован")
         for path in paths:
             st.write(str(path))
@@ -778,7 +802,18 @@ def render_app() -> None:
     st.set_page_config(page_title="Searh-NEIRO", layout="wide")
     tasks = load_tasks()
     total, done, pending = task_progress(tasks)
-    pages = ["Поиск", "Компании", "Промпты", "Нейросети", "Автокомбайн", "Очередь", "По компаниям", "Источники / Поиск", "Отчёт"]
+    pages = [
+        "Поиск",
+        "Компании",
+        "Промпты",
+        "Нейросети",
+        "Автокомбайн",
+        "Очередь",
+        "По компаниям",
+        "Источники / Поиск",
+        "Отчёт",
+        "Статистика",
+    ]
     if "page" not in st.session_state:
         st.session_state["page"] = "Поиск"
     with st.sidebar:
@@ -810,8 +845,10 @@ def render_app() -> None:
         page_company_view()
     elif page == "Источники / Поиск":
         page_sources_search()
-    else:
+    elif page == "Отчёт":
         page_report()
+    else:
+        render_statistics_page()
 
 
 def main() -> None:

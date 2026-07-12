@@ -33,6 +33,8 @@ def write_csv(results: list[ProviderResult], output_dir: Path, brand: str, compe
         "model",
         "ok",
         "brand_found",
+        "brand_in_prompt",
+        "organic_brand_found",
         "brand_position",
         "role",
         "competitors_found",
@@ -55,13 +57,15 @@ def write_csv(results: list[ProviderResult], output_dir: Path, brand: str, compe
                     "model": result.model,
                     "ok": result.ok,
                     "brand_found": analysis.get("brand_found") if analysis else "",
+                    "brand_in_prompt": record.get("brand_in_prompt", ""),
+                    "organic_brand_found": record.get("organic_brand_found", ""),
                     "brand_position": analysis.get("brand_position") if analysis else "",
                     "role": analysis.get("role") if analysis else "",
                     "competitors_found": ", ".join(analysis.get("competitors_found", [])) if analysis else "",
                     "latency_ms": result.latency_ms,
                     "error": result.error or "",
                     "prompt": result.prompt,
-                    "answer": result.answer,
+                    "answer": record.get("answer", ""),
                     "citations": ", ".join(result.citations),
                 }
             )
@@ -77,8 +81,10 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
         f"- Total answers: {summary['total_results']}",
         f"- Successful answers: {summary['ok_results']}",
         f"- Brand found: {summary['brand_found']}",
+        f"- Brand found organically: {summary['organic_brand_found']} / {summary['organic_results']}",
         f"- Brand recommended: {summary['brand_recommended']}",
         f"- Visibility rate: {summary['visibility_rate']}",
+        f"- Organic visibility rate: {summary['organic_visibility_rate']}",
         f"- Recommendation rate: {summary['recommendation_rate']}",
         "",
         "## Answers",
@@ -102,6 +108,8 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
             lines.extend(
                 [
                     f"**Brand found:** {analysis['brand_found']}",
+                    f"**Brand in prompt:** {record['brand_in_prompt']}",
+                    f"**Organic brand found:** {record['organic_brand_found']}",
                     f"**Brand position:** {analysis['brand_position']}",
                     f"**Role:** {analysis['role']}",
                     f"**Competitors found:** {', '.join(analysis['competitors_found']) or '-'}",
@@ -109,7 +117,7 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
             )
         if result.citations:
             lines.append(f"**Citations:** {', '.join(result.citations)}")
-        lines.extend(["", "**Answer:**", "", result.answer or "_No answer_", ""])
+        lines.extend(["", "**Answer:**", "", record.get("answer") or "_No answer_", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 

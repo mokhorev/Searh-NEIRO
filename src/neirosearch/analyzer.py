@@ -69,6 +69,18 @@ STOP_COMPANY_CANDIDATES = {
     "компания",
     "бренд",
     "сеть",
+    "zoon",
+    "profi",
+    "instagram",
+    "flamp",
+    "avito",
+    "airtouch",
+    "balayage",
+    "shatush",
+    "beauty",
+    "hair",
+    "openstreetmap",
+    "mapbox",
     "ооо",
     "ип",
     "ао",
@@ -77,6 +89,15 @@ STOP_COMPANY_CANDIDATES = {
     "ано",
     "чоу",
     "нко",
+}
+
+GENERIC_COMPANY_PHRASES = {
+    "салон красоты",
+    "студия красоты",
+    "центр красоты",
+    "клиника красоты",
+    "beauty salon",
+    "hair salon",
 }
 
 BAD_CANDIDATE_SUBSTRINGS = (
@@ -107,6 +128,11 @@ BAD_CANDIDATE_SUBSTRINGS = (
     "проверить",
     "смотрите",
     "обратите внимание",
+    "развернуть ",
+    "закрыто ",
+    "условия",
+    "openstreetmap",
+    "mapbox",
 )
 
 BAD_PREFIXES = (
@@ -178,6 +204,18 @@ def normalize_text(value: str) -> str:
     value = re.sub(r"[^\w\s\-]+", " ", value, flags=re.UNICODE)
     value = re.sub(r"\s+", " ", value).strip()
     return value
+
+
+def clean_answer_for_report(answer: str) -> str:
+    """Remove visible map/widget chrome while keeping the original answer elsewhere."""
+    text = str(answer or "")
+    text = re.sub(
+        r"(?is)\A.*?\nРазвернуть\s*\n.*?\nОставить отзыв\s*\n",
+        "",
+        text,
+        count=1,
+    )
+    return text.strip()
 
 
 def find_position(answer: str, term: str) -> int | None:
@@ -279,12 +317,20 @@ def is_reasonable_company_candidate(value: str, brand: str = "") -> bool:
     normalized = normalize_text(candidate)
     if not normalized or normalized in STOP_COMPANY_CANDIDATES:
         return False
+    if normalized in GENERIC_COMPANY_PHRASES:
+        return False
+    if re.fullmatch(r"(?:салон|студия|центр|клиника) красоты(?: \d+)?", normalized):
+        return False
     if any(part in normalized for part in BAD_CANDIDATE_SUBSTRINGS):
         return False
     if normalized.startswith(BAD_PREFIXES):
         return False
     if brand and normalized == normalize_text(brand):
         return False
+    if brand:
+        brand_normalized = normalize_text(brand)
+        if re.search(rf"(?:^|\s){re.escape(brand_normalized)}(?:$|\s)", normalized):
+            return False
     if re.fullmatch(r"[\d\W_]+", candidate):
         return False
     words = normalized.split()
@@ -434,11 +480,31 @@ def analyze_answer(answer: str, brand: str, competitors: list[str] | None = None
     )
 
 
+def prompt_mentions_brand(prompt: str, brand: str) -> bool:
+    normalized_prompt = normalize_text(prompt)
+    normalized_brand = normalize_text(brand)
+    if not normalized_prompt or not normalized_brand:
+        return False
+    return bool(re.search(rf"(?<!\w){re.escape(normalized_brand)}(?!\w)", normalized_prompt))
+
+
 def summarize_results(results: list[ProviderResult], brand: str, competitors: list[str] | None = None) -> dict[str, Any]:
-    analyses = [analyze_answer(r.answer, brand, competitors).to_dict() for r in results if r.ok]
-    ok_count = sum(1 for r in results if r.ok)
+    successful_results = [r for r in results if r.ok]
+    analyses = [
+        analyze_answer(clean_answer_for_report(r.answer), brand, competitors).to_dict()
+        for r in successful_results
+    ]
+    ok_count = len(successful_results)
     found_count = sum(1 for a in analyses if a["brand_found"])
     recommended_count = sum(1 for a in analyses if a["role"] == "recommended")
+    organic_pairs = [
+        (result, analysis)
+        for result, analysis in zip(successful_results, analyses)
+        if not prompt_mentions_brand(result.prompt, brand)
+    ]
+    organic_found_count = sum(1 for _, analysis in organic_pairs if analysis["brand_found"])
+    organic_recommended_count = sum(1 for _, analysis in organic_pairs if analysis["role"] == "recommended")
+    prompted_count = ok_count - len(organic_pairs)
     return {
         "brand": brand,
         "total_results": len(results),
@@ -447,13 +513,29 @@ def summarize_results(results: list[ProviderResult], brand: str, competitors: li
         "brand_recommended": recommended_count,
         "visibility_rate": round(found_count / ok_count, 3) if ok_count else 0,
         "recommendation_rate": round(recommended_count / ok_count, 3) if ok_count else 0,
+        "prompted_results": prompted_count,
+        "prompted_brand_found": found_count - organic_found_count,
+        "organic_results": len(organic_pairs),
+        "organic_brand_found": organic_found_count,
+        "organic_brand_recommended": organic_recommended_count,
+        "organic_visibility_rate": round(organic_found_count / len(organic_pairs), 3)
+        if organic_pairs
+        else 0,
+        "organic_recommendation_rate": round(organic_recommended_count / len(organic_pairs), 3)
+        if organic_pairs
+        else 0,
         "analyses": analyses,
     }
 
 
 def result_record(result: ProviderResult, brand: str, competitors: list[str] | None = None) -> dict[str, Any]:
-    analysis = analyze_answer(result.answer, brand, competitors) if result.ok else None
+    cleaned_answer = clean_answer_for_report(result.answer)
+    analysis = analyze_answer(cleaned_answer, brand, competitors) if result.ok else None
     record = result.to_dict()
+    record["raw_answer"] = result.answer
+    record["answer"] = cleaned_answer
+    record["brand_in_prompt"] = prompt_mentions_brand(result.prompt, brand)
+    record["organic_brand_found"] = bool(analysis and analysis.brand_found and not record["brand_in_prompt"])
     record["analysis"] = asdict(analysis) if analysis else None
-    record["possible_companies"] = extract_possible_company_names(result.answer, brand=brand) if result.ok else []
+    record["possible_companies"] = extract_possible_company_names(cleaned_answer, brand=brand) if result.ok else []
     return record
