@@ -2,12 +2,11 @@ import csv
 from pathlib import Path
 
 from neirosearch.models import ProviderResult
-
 from neirosearch.reports import excel_safe_text, write_csv
 
 
 def test_excel_safe_text_blocks_formula_prefixes() -> None:
-    assert excel_safe_text("=HYPERLINK(\"https://evil.test\")").startswith("'=")
+    assert excel_safe_text('=HYPERLINK("https://evil.test")').startswith("'=")
     assert excel_safe_text("  +cmd").startswith("'  +")
     assert excel_safe_text("normal answer") == "normal answer"
 
