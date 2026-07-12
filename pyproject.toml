@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "searh-neiro"
-version = "0.1.0"
-description = "Multi-LLM probe tool for AI visibility audits in Russia and global/VPN environments"
+version = "0.2.0"
+description = "Search-NEIRO: repeatable multi-LLM customer-query simulation and evidence capture"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,15 +19,32 @@ dependencies = [
   "python-dotenv>=1.0.1",
   "pandas>=2.2.0",
   "streamlit>=1.40.0",
-  "playwright>=1.49.0"
+  "playwright>=1.49.0",
+  "pydantic>=2.8.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-cov>=5.0.0",
+  "ruff>=0.9.0",
 ]
 
 [project.scripts]
 neirosearch = "neirosearch.cli:app"
 neirosearch-ui = "neirosearch.ui_app:main"
+neirosearch-measurement = "neirosearch.measurement_cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
 [tool.ruff]
 line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
