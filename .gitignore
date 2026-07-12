@@ -8,6 +8,8 @@ __pycache__/
 outputs/
 reports/
 browser_profile/
+inputs/companies.csv
+inputs/providers.txt
 client_data/
 local_data/
 evidence/
