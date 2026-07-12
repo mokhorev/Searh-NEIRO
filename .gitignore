@@ -10,6 +10,16 @@ reports/
 browser_profile/
 inputs/companies.csv
 inputs/providers.txt
+client_data/
+local_data/
+evidence/
+*.db
+*.sqlite
+*.sqlite3
+*.mhtml
+*.har
 .DS_Store
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
