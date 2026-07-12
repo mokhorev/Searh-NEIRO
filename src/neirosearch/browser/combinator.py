@@ -9,13 +9,30 @@ from typing import Any
 
 import pandas as pd
 
+from ..task_status import (
+    STATUS_OK,
+    STATUS_PENDING,
+    STATUS_RETRY,
+    STATUS_RUNNING,
+    append_note,
+    create_run_log_path,
+    ensure_task_status_columns,
+    increment_attempts,
+    now_ts,
+    parse_float,
+    status_for_row,
+    write_log_line,
+)
+
 try:
     from playwright.sync_api import sync_playwright
 except Exception:  # pragma: no cover - handled at runtime
     sync_playwright = None  # type: ignore[assignment]
 
-TASKS_PATH = Path("outputs/ui_tasks.csv")
-PROFILE_DIR = Path("browser_profile")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+TASKS_PATH = PROJECT_ROOT / "outputs" / "ui_tasks.csv"
+LOGS_DIR = PROJECT_ROOT / "outputs" / "logs"
+PROFILE_DIR = PROJECT_ROOT / "browser_profile"
 CSV_SEP = ";"
 
 PROVIDER_URLS = {
@@ -48,6 +65,15 @@ COMMON_INPUT_SELECTORS = [
 ]
 
 PROVIDER_INPUT_SELECTORS = {
+    "gemini_web": [
+        "rich-textarea div.ql-editor",
+        "div.ql-editor[contenteditable='true']",
+        "div[aria-label*='Enter a prompt']",
+        "div[aria-label*='Введите запрос']",
+        "div[contenteditable='true'][role='textbox']",
+        "[role='textbox']",
+        "textarea:not([disabled])",
+    ],
     "gigachat_web": [
         "textarea[placeholder*='Спрос']",
         "textarea[placeholder*='Напишите']",
@@ -63,6 +89,17 @@ PROVIDER_INPUT_SELECTORS = {
         "div[contenteditable='true'][data-lexical-editor='true']",
         "div[contenteditable='true']",
         "[role='textbox']",
+    ],
+    "grok_web": [
+        "textarea[placeholder*='Ask Grok']",
+        "textarea[placeholder*='Ask']",
+        "textarea[placeholder*='Спрос']",
+        "[data-testid*='composer'] textarea",
+        "[data-testid*='input'] textarea",
+        "div[contenteditable='true']",
+        "[contenteditable='true']",
+        "[role='textbox']",
+        "form textarea",
     ],
     "perplexity_web": [
         "textarea[placeholder*='Ask']",
@@ -87,6 +124,15 @@ COMMON_SEND_SELECTORS = [
 ]
 
 PROVIDER_SEND_SELECTORS = {
+    "gemini_web": [
+        "button[aria-label*='Send message']",
+        "button[aria-label*='Submit']",
+        "button[aria-label*='Отправить']",
+        "button[aria-label*='Отправ']",
+        "button.send-button",
+        "button[data-testid*='send']",
+        "button[type='submit']",
+    ],
     "gigachat_web": [
         "button[aria-label*='Отправ']",
         "button[aria-label*='отправ']",
@@ -94,6 +140,13 @@ PROVIDER_SEND_SELECTORS = {
         "button[data-testid*='send']",
         "button[class*='send']",
         "form button[type='submit']",
+        "button[type='submit']",
+    ],
+    "grok_web": [
+        "button[aria-label*='Submit']",
+        "button[aria-label*='Send']",
+        "button[aria-label*='Отправ']",
+        "button[data-testid*='send']",
         "button[type='submit']",
     ],
     "perplexity_web": [
@@ -111,15 +164,9 @@ ANSWER_SELECTORS = {
     "perplexity_web": ["[data-testid='answer']", "main article", ".prose", "main"],
     "deepseek_web": [".ds-markdown", ".markdown", "main"],
     "qwen_web": [".markdown", ".prose", "main"],
-    "gemini_web": ["message-content", ".markdown", "main"],
-    "gigachat_web": [
-        "[data-testid*='assistant']",
-        "[class*='assistant']",
-        "[class*='message']",
-        ".markdown",
-        "main",
-    ],
-    "grok_web": ["article", ".markdown", "main"],
+    "gemini_web": ["message-content", "model-response", ".model-response-text", ".markdown", "main"],
+    "gigachat_web": ["[data-testid*='assistant']", "[class*='assistant']", "[class*='message']", ".markdown", "main"],
+    "grok_web": ["[data-testid*='message']", "article", ".markdown", ".prose", "main"],
 }
 
 COMMON_WINDOWS_BROWSERS = [
@@ -129,14 +176,13 @@ COMMON_WINDOWS_BROWSERS = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
 ]
 
-# Short fragments that usually mean the model is still starting or UI text was captured.
 INCOMPLETE_MARKERS = [
     "думаю",
     "thinking",
     "generating",
     "ответ формируется",
-    "продолжить генерацию",
     "continue generating",
+    "продолжить генерацию",
 ]
 
 
@@ -145,11 +191,15 @@ class BrowserRunResult:
     processed: int = 0
     saved: int = 0
     failed: int = 0
+    retried: int = 0
     logs: list[str] = field(default_factory=list)
     log_callback: Callable[[str], None] | None = None
+    run_id: str = ""
+    log_path: Path | None = None
 
     def add(self, message: str) -> None:
         self.logs.append(message)
+        write_log_line(self.log_path, message)
         if self.log_callback:
             self.log_callback(message)
 
@@ -173,49 +223,38 @@ def launch_visible_context(playwright: Any, profile_dir: Path):
     """Launch visible Chrome/Edge first, then fall back to Playwright browsers."""
     profile_dir.mkdir(parents=True, exist_ok=True)
     executable = find_local_browser()
-    common_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-dev-shm-usage",
-    ]
+    common_args = ["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
     if executable:
         return playwright.chromium.launch_persistent_context(
-            str(profile_dir),
-            headless=False,
-            executable_path=executable,
-            args=common_args,
+            str(profile_dir), headless=False, executable_path=executable, args=common_args
         )
     for channel in ("chrome", "msedge"):
         try:
             return playwright.chromium.launch_persistent_context(
-                str(profile_dir),
-                headless=False,
-                channel=channel,
-                args=common_args,
+                str(profile_dir), headless=False, channel=channel, args=common_args
             )
         except Exception:
             continue
-    return playwright.chromium.launch_persistent_context(
-        str(profile_dir),
-        headless=False,
-        args=common_args,
-    )
+    return playwright.chromium.launch_persistent_context(str(profile_dir), headless=False, args=common_args)
 
 
 def read_tasks(path: Path = TASKS_PATH) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig").fillna("")
+        df = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig").fillna("")
     except Exception:
         return pd.DataFrame()
+    return ensure_task_status_columns(df)
 
 
 def save_tasks(df: pd.DataFrame, path: Path = TASKS_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, sep=CSV_SEP, index=False, encoding="utf-8-sig")
+    ensure_task_status_columns(df).to_csv(path, sep=CSV_SEP, index=False, encoding="utf-8-sig")
 
 
 def pending_task_indexes(df: pd.DataFrame, providers: list[str] | None = None) -> list[int]:
+    df = ensure_task_status_columns(df)
     if df.empty or "answer" not in df.columns:
         return []
     providers_set = set(providers or [])
@@ -228,8 +267,73 @@ def pending_task_indexes(df: pd.DataFrame, providers: list[str] | None = None) -
             continue
         if providers_set and provider_id not in providers_set:
             continue
+        status = status_for_row(row)
+        if status not in {STATUS_PENDING, STATUS_RETRY}:
+            continue
         indexes.append(int(idx))
     return indexes
+
+
+def pending_task_diagnostics(
+    df: pd.DataFrame,
+    providers: list[str] | None = None,
+    tasks_path: Path = TASKS_PATH,
+) -> list[str]:
+    """Explain why no tasks are runnable without hiding the queue location."""
+    path = tasks_path.resolve()
+    if not tasks_path.exists():
+        return [
+            f"Файл очереди не найден: {path}",
+            "Создай задачи в разделе «Поиск» основного интерфейса.",
+        ]
+    if df.empty:
+        return [f"Файл очереди пуст: {path}", "Создай очередь заново в разделе «Поиск»."]
+
+    work = ensure_task_status_columns(df)
+    requested = set(providers or [])
+    unsupported_requested = sorted(requested - set(PROVIDER_URLS))
+    messages: list[str] = [f"Файл очереди: {path}"]
+    if unsupported_requested:
+        messages.append(f"Не поддерживаются автокомбайном: {', '.join(unsupported_requested)}.")
+    if "provider_id" not in work.columns:
+        messages.append("В очереди отсутствует обязательный столбец provider_id.")
+        return messages
+
+    provider_ids = work["provider_id"].astype(str).str.strip()
+    selected_provider_ids = requested & set(PROVIDER_URLS) if requested else set(PROVIDER_URLS)
+    selected = work[provider_ids.isin(selected_provider_ids)]
+    if selected.empty:
+        available = sorted({value for value in provider_ids if value})
+        requested_text = ", ".join(sorted(requested)) if requested else "поддерживаемых провайдеров"
+        messages.append(f"В очереди нет задач для: {requested_text}.")
+        if available:
+            messages.append(f"Провайдеры в очереди: {', '.join(available)}.")
+        return messages
+
+    selected = ensure_task_status_columns(selected)
+    answered = int(selected["answer"].astype(str).str.strip().ne("").sum())
+    pending = int((selected["status"] == STATUS_PENDING).sum())
+    retry = int((selected["status"] == STATUS_RETRY).sum())
+    running = int((selected["status"] == STATUS_RUNNING).sum())
+    other = len(selected) - answered - pending - retry - running
+    messages.append(
+        "Для выбранных провайдеров: "
+        f"всего {len(selected)}, готово {answered}, pending {pending}, retry {retry}, "
+        f"running {running}, прочие статусы {max(0, other)}."
+    )
+    if pending or retry:
+        messages.append(
+            "Задачи pending/retry есть, но они не прошли фильтры запуска; "
+            "проверь provider_id и данные промпта."
+        )
+    elif answered == len(selected):
+        messages.append("Все задачи выбранных провайдеров уже имеют ответы.")
+    else:
+        messages.append(
+            "Нет задач со статусом pending или retry. "
+            "Running, error и skipped автоматически не запускаются."
+        )
+    return messages
 
 
 def open_login_pages(
@@ -339,7 +443,6 @@ def looks_incomplete(text: str) -> bool:
         return True
     if any(marker in value for marker in INCOMPLETE_MARKERS):
         return True
-    # One very short line is usually a captured status/prompt, not a completed audit answer.
     return len(value) < 120 and "\n" not in value
 
 
@@ -350,12 +453,7 @@ def wait_for_answer(
     min_answer_chars: int = 300,
     stable_rounds_required: int = 8,
 ) -> str:
-    """Wait until answer text stops growing and is long enough for an audit prompt.
-
-    Earlier versions stopped after only a few stable reads. Some web LLMs render a short
-    placeholder first or append slowly, especially Qwen/Perplexity/GigaChat. This function
-    waits longer and avoids saving tiny incomplete snippets when the timeout allows it.
-    """
+    """Wait until answer text stops growing and is long enough for an audit prompt."""
     started = time.time()
     last_text = ""
     stable_rounds = 0
@@ -375,6 +473,33 @@ def wait_for_answer(
     return last_text
 
 
+def _mark_task_started(df: pd.DataFrame, idx: int, run_id: str) -> None:
+    df.at[idx, "status"] = STATUS_RUNNING
+    df.at[idx, "attempts"] = increment_attempts(df.at[idx, "attempts"] if "attempts" in df.columns else "0")
+    df.at[idx, "last_run_at"] = now_ts()
+    df.at[idx, "run_id"] = run_id
+    df.at[idx, "error"] = ""
+
+
+def _mark_task_ok(df: pd.DataFrame, idx: int, answer: str, started_at: float, run_id: str) -> None:
+    df.at[idx, "answer"] = answer
+    df.at[idx, "status"] = STATUS_OK
+    df.at[idx, "error"] = ""
+    df.at[idx, "run_id"] = run_id
+    df.at[idx, "duration_sec"] = round(time.time() - started_at, 1)
+    df.at[idx, "last_run_at"] = now_ts()
+    df.at[idx, "notes"] = append_note(df.at[idx, "notes"], f"auto_browser; {now_ts()}")
+
+
+def _mark_task_retry(df: pd.DataFrame, idx: int, message: str, started_at: float, run_id: str) -> None:
+    df.at[idx, "status"] = STATUS_RETRY
+    df.at[idx, "error"] = message
+    df.at[idx, "run_id"] = run_id
+    df.at[idx, "duration_sec"] = round(time.time() - started_at, 1)
+    df.at[idx, "last_run_at"] = now_ts()
+    df.at[idx, "notes"] = append_note(df.at[idx, "notes"], "auto_browser_retry")
+
+
 def run_pending_tasks(
     providers: list[str] | None = None,
     limit: int = 3,
@@ -384,16 +509,21 @@ def run_pending_tasks(
     tasks_path: Path = TASKS_PATH,
     log_callback: Callable[[str], None] | None = None,
 ) -> BrowserRunResult:
-    require_playwright()
-    result = BrowserRunResult(log_callback=log_callback)
+    run_id, log_path = create_run_log_path(LOGS_DIR)
+    result = BrowserRunResult(log_callback=log_callback, run_id=run_id, log_path=log_path)
+    result.add(f"Старт автокомбайна: run_id={run_id}")
     df = read_tasks(tasks_path)
     indexes = pending_task_indexes(df, providers=providers)
     if limit > 0:
         indexes = indexes[:limit]
     if not indexes:
-        result.add("Нет незаполненных задач для выбранных нейросетей.")
+        result.add("Нет задач, готовых к запуску.")
+        for message in pending_task_diagnostics(df, providers=providers, tasks_path=tasks_path):
+            result.add(message)
         return result
 
+    require_playwright()
+    result.add(f"В очереди к запуску: {len(indexes)} задач. Лог: {log_path}")
     profile_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:  # type: ignore[operator]
         context = launch_visible_context(p, profile_dir)
@@ -404,36 +534,56 @@ def run_pending_tasks(
             label = PROVIDER_LABELS.get(provider_id, provider_id)
             url = PROVIDER_URLS.get(provider_id)
             prompt = str(row.get("prompt", ""))
+            started_at = time.time()
             result.processed += 1
             if not url or not prompt:
+                message = "нет URL или промпта"
+                _mark_task_retry(df, idx, message, started_at, run_id)
+                save_tasks(df, tasks_path)
                 result.failed += 1
-                result.add(f"Пропуск #{idx}: нет URL или промпта.")
+                result.retried += 1
+                result.add(f"Пропуск #{idx}: {message}.")
                 continue
             try:
+                _mark_task_started(df, idx, run_id)
+                save_tasks(df, tasks_path)
                 result.add(f"Открываю {label}: задача #{idx}.")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 time.sleep(4)
                 ok = submit_prompt(page, prompt, provider_id=provider_id)
                 if not ok:
+                    message = "не найдено поле ввода"
+                    _mark_task_retry(df, idx, message, started_at, run_id)
+                    save_tasks(df, tasks_path)
                     result.failed += 1
-                    result.add(f"{label}: не нашёл поле ввода. Проверь вход и селекторы, затем заполни вручную в очереди.")
+                    result.retried += 1
+                    result.add(f"{label}: {message}. Проверь вход и селекторы, затем заполни вручную в очереди.")
                     continue
                 result.add(f"{label}: промпт отправлен, жду полный ответ до {answer_timeout_sec} сек.")
                 answer = wait_for_answer(page, provider_id, timeout_sec=answer_timeout_sec)
                 if answer:
-                    df.at[idx, "answer"] = answer
-                    df.at[idx, "notes"] = f"auto_browser; {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    _mark_task_ok(df, idx, answer, started_at, run_id)
                     save_tasks(df, tasks_path)
                     result.saved += 1
                     short_note = "" if len(answer) >= 300 else " Возможно, ответ короткий — проверь вручную."
-                    result.add(f"{label}: ответ сохранён, {len(answer)} символов.{short_note}")
+                    duration = parse_float(df.at[idx, "duration_sec"]) or 0
+                    result.add(f"{label}: ответ сохранён, {len(answer)} символов, {duration:.1f} сек.{short_note}")
                 else:
+                    message = "ответ не удалось прочитать автоматически"
+                    _mark_task_retry(df, idx, message, started_at, run_id)
+                    save_tasks(df, tasks_path)
                     result.failed += 1
-                    result.add(f"{label}: ответ не удалось прочитать автоматически.")
+                    result.retried += 1
+                    result.add(f"{label}: {message}.")
                 time.sleep(delay_sec)
             except Exception as exc:  # noqa: BLE001
+                message = str(exc)
+                _mark_task_retry(df, idx, message, started_at, run_id)
+                save_tasks(df, tasks_path)
                 result.failed += 1
-                result.add(f"{label}: ошибка {exc}")
+                result.retried += 1
+                result.add(f"{label}: ошибка {message}")
         time.sleep(5)
         context.close()
+    result.add(f"Финиш автокомбайна: обработано={result.processed}, сохранено={result.saved}, на повтор={result.retried}, ошибок={result.failed}")
     return result

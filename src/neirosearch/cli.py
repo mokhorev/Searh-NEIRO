@@ -19,7 +19,7 @@ from .manual import (
     write_companies_example,
     write_manual_template,
 )
-from .openserp import openserp_search
+from .openserp import DEFAULT_OPENSERP_BASE_URL, DEFAULT_OPENSERP_ENGINES, openserp_search
 from .prompts import DEFAULT_SYSTEM, load_prompts
 from .providers import build_provider, is_configured
 from .reports import write_all_reports
@@ -212,14 +212,28 @@ def batch_manual_import(
 @app.command("search")
 def search_web(
     query: Annotated[str, typer.Argument(help="Search query")],
-    engines: Annotated[str, typer.Option("--engines", "-e")] = "yandex,bing,duckduckgo,google",
+    engines: Annotated[str, typer.Option("--engines", "-e")] = DEFAULT_OPENSERP_ENGINES,
     limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
     lang: Annotated[str, typer.Option("--lang")] = "RU",
     region: Annotated[str, typer.Option("--region")] = "RU",
+    base_url: Annotated[str, typer.Option("--base-url", help="Local OpenSERP base URL")] = DEFAULT_OPENSERP_BASE_URL,
+    mode: Annotated[str, typer.Option("--mode", help="OpenSERP mode: balanced, any, fast")] = "balanced",
+    extract: Annotated[bool, typer.Option("--extract/--no-extract", help="Ask OpenSERP to extract page text where supported")] = False,
+    timeout: Annotated[int, typer.Option("--timeout", help="HTTP timeout, seconds")] = 60,
 ) -> None:
     """Run an optional OpenSERP search and print JSON."""
     load_dotenv()
-    data = openserp_search(query=query, engines=engines, limit=limit, lang=lang, region=region)
+    data = openserp_search(
+        query=query,
+        engines=engines,
+        limit=limit,
+        lang=lang,
+        region=region,
+        base_url=base_url,
+        mode=mode,
+        extract=1 if extract else 0,
+        timeout=timeout,
+    )
     console.print(json.dumps(data, ensure_ascii=False, indent=2))
 
 

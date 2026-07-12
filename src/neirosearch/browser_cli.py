@@ -46,11 +46,11 @@ def login(
 @app.command("run")
 def run(
     providers: Annotated[str, typer.Option("--providers", "-p", help="Провайдеры через запятую. Пусто = все поддержанные")] = "",
-    limit: Annotated[int, typer.Option("--limit", "-n", help="Сколько незаполненных задач пройти за один запуск")] = 3,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Сколько незаполненных/retry задач пройти за один запуск")] = 3,
     delay: Annotated[int, typer.Option("--delay", help="Пауза между запросами, секунд")] = 10,
     timeout: Annotated[int, typer.Option("--timeout", help="Сколько ждать ответ, секунд")] = 90,
 ) -> None:
-    """Run a small visible browser batch over pending tasks from outputs/ui_tasks.csv."""
+    """Run a small visible browser batch over pending/retry tasks from outputs/ui_tasks.csv."""
     provider_ids = parse_provider_ids(providers) if providers else None
     result = run_pending_tasks(
         providers=provider_ids,
@@ -58,11 +58,15 @@ def run(
         delay_sec=delay,
         answer_timeout_sec=timeout,
     )
+    console.print(f"[bold]Run ID:[/bold] {result.run_id}")
+    if result.log_path:
+        console.print(f"[bold]Лог:[/bold] {result.log_path}")
     console.print(f"[bold]Обработано:[/bold] {result.processed}")
     console.print(f"[green]Сохранено:[/green] {result.saved}")
+    console.print(f"[yellow]На повтор:[/yellow] {result.retried}")
     console.print(f"[red]Ошибок:[/red] {result.failed}")
     if result.logs:
-        console.print("[bold]Лог:[/bold]")
+        console.print("[bold]События:[/bold]")
         for line in result.logs:
             console.print(f"- {line}")
 
