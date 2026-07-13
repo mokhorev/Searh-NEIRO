@@ -65,6 +65,17 @@ SQLite is the operational source of truth. CSV, Markdown and Google Sheets remai
 4. Integrate the UI only after the importer has been used on at least two real cases.
 5. Keep every schema change versioned in `schema_meta`.
 
+### Schema version contract
+
+- The existing Measurement Core schema is version `1`.
+- An absent `schema_meta` version is treated as version `0`; initialization applies registered
+  forward migrations through the version supported by the running code.
+- Each migration and its `schema_meta.schema_version` update are committed atomically. The
+  version is advanced only after the migration step succeeds.
+- Reopening a database already at the supported version is a no-op.
+- A database version newer than the running code supports is rejected before schema changes.
+  Downgrades are not attempted; use a newer Search-NEIRO build instead.
+
 ## Trust model
 
 Machine extraction is never treated as a final fact. New observations are marked `RAW_SIGNAL`, include evidence spans, and default to manual review where confidence, citations or entity extraction are weak.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,6 +19,147 @@ from .models import (
 )
 
 SCHEMA_VERSION = 1
+
+
+class UnsupportedSchemaVersionError(RuntimeError):
+    """Raised when a database was created by a newer unsupported schema."""
+
+
+Migration = Callable[[sqlite3.Connection], None]
+
+
+SCHEMA_V1_SQL = """
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS companies (
+    company_id TEXT PRIMARY KEY,
+    brand TEXT NOT NULL,
+    industry TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS queries (
+    query_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+    prompt_id TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL,
+    intent_class TEXT NOT NULL,
+    critical INTEGER NOT NULL DEFAULT 0,
+    needs_repeat INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    query_id TEXT NOT NULL REFERENCES queries(query_id) ON DELETE CASCADE,
+    provider_id TEXT NOT NULL,
+    provider_label TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    attempt INTEGER NOT NULL DEFAULT 1,
+    capture_mode TEXT NOT NULL,
+    web_mode TEXT NOT NULL,
+    geo TEXT NOT NULL DEFAULT '',
+    personalization TEXT NOT NULL DEFAULT 'unknown',
+    session_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    error_code TEXT,
+    error_message TEXT NOT NULL DEFAULT '',
+    raw_path TEXT NOT NULL DEFAULT '',
+    evidence_path TEXT NOT NULL DEFAULT '',
+    answer_sha256 TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(run_id, query_id, provider_id, attempt)
+);
+
+CREATE TABLE IF NOT EXISTS answers (
+    answer_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+    answer_text TEXT NOT NULL,
+    citations_json TEXT NOT NULL DEFAULT '[]',
+    captured_at TEXT NOT NULL,
+    answer_sha256 TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS observations (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+    observation_json TEXT NOT NULL,
+    signal_level TEXT NOT NULL,
+    requires_manual_review INTEGER NOT NULL,
+    analyzer_version TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evidence_items (
+    evidence_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    path_or_url TEXT NOT NULL,
+    sha256 TEXT NOT NULL DEFAULT '',
+    captured_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS memory_events (
+    event_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    company_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    query TEXT NOT NULL DEFAULT '',
+    raw_path TEXT NOT NULL DEFAULT '',
+    event_json TEXT NOT NULL,
+    verification_status TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    supersedes_event_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_queries_company ON queries(company_id);
+CREATE INDEX IF NOT EXISTS idx_runs_company ON runs(company_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_provider ON tasks(provider_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_memory_company_time ON memory_events(company_id, occurred_at);
+"""
+
+
+def _execute_sql_statements(connection: sqlite3.Connection, script: str) -> None:
+    for statement in script.split(";"):
+        if sql := statement.strip():
+            connection.execute(sql)
+
+
+def _migrate_to_v1(connection: sqlite3.Connection) -> None:
+    _execute_sql_statements(connection, SCHEMA_V1_SQL)
+
+
+MIGRATIONS: dict[int, Migration] = {
+    1: _migrate_to_v1,
+}
 
 
 def _json(value: Any) -> str:
@@ -37,7 +179,6 @@ class MeasurementStore:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute("PRAGMA busy_timeout = 5000")
 
     def __enter__(self) -> "MeasurementStore":
@@ -50,133 +191,62 @@ class MeasurementStore:
             self.connection.rollback()
         self.connection.close()
 
+    def _read_schema_version(self) -> int:
+        table = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'"
+        ).fetchone()
+        if table is None:
+            return 0
+
+        row = self.connection.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if row is None:
+            return 0
+
+        raw_version = str(row["value"])
+        try:
+            version = int(raw_version)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid database schema version: {raw_version!r}"
+            ) from exc
+        if version < 0:
+            raise RuntimeError(f"Invalid database schema version: {version}")
+        return version
+
     def initialize(self) -> None:
-        self.connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS schema_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
+        current_version = self._read_schema_version()
+        if current_version > SCHEMA_VERSION:
+            raise UnsupportedSchemaVersionError(
+                "Database schema version "
+                f"{current_version} is newer than supported version {SCHEMA_VERSION}; "
+                "upgrade Search-NEIRO before opening this database."
+            )
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        if current_version == SCHEMA_VERSION:
+            return
 
-            CREATE TABLE IF NOT EXISTS companies (
-                company_id TEXT PRIMARY KEY,
-                brand TEXT NOT NULL,
-                industry TEXT NOT NULL DEFAULT '',
-                region TEXT NOT NULL DEFAULT '',
-                aliases_json TEXT NOT NULL DEFAULT '[]',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
+        pending_versions = list(range(current_version + 1, SCHEMA_VERSION + 1))
+        missing_versions = [version for version in pending_versions if version not in MIGRATIONS]
+        if missing_versions:
+            missing = ", ".join(str(version) for version in missing_versions)
+            raise RuntimeError(f"Missing database migrations for schema version(s): {missing}")
 
-            CREATE TABLE IF NOT EXISTS queries (
-                query_id TEXT PRIMARY KEY,
-                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
-                prompt_id TEXT NOT NULL DEFAULT '',
-                prompt TEXT NOT NULL,
-                intent_class TEXT NOT NULL,
-                critical INTEGER NOT NULL DEFAULT 0,
-                needs_repeat INTEGER NOT NULL DEFAULT 0,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id TEXT PRIMARY KEY,
-                company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
-                status TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                completed_at TEXT,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
-                query_id TEXT NOT NULL REFERENCES queries(query_id) ON DELETE CASCADE,
-                provider_id TEXT NOT NULL,
-                provider_label TEXT NOT NULL DEFAULT '',
-                model TEXT NOT NULL DEFAULT '',
-                attempt INTEGER NOT NULL DEFAULT 1,
-                capture_mode TEXT NOT NULL,
-                web_mode TEXT NOT NULL,
-                geo TEXT NOT NULL DEFAULT '',
-                personalization TEXT NOT NULL DEFAULT 'unknown',
-                session_id TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                error_code TEXT,
-                error_message TEXT NOT NULL DEFAULT '',
-                raw_path TEXT NOT NULL DEFAULT '',
-                evidence_path TEXT NOT NULL DEFAULT '',
-                answer_sha256 TEXT NOT NULL DEFAULT '',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(run_id, query_id, provider_id, attempt)
-            );
-
-            CREATE TABLE IF NOT EXISTS answers (
-                answer_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
-                answer_text TEXT NOT NULL,
-                citations_json TEXT NOT NULL DEFAULT '[]',
-                captured_at TEXT NOT NULL,
-                answer_sha256 TEXT NOT NULL,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE IF NOT EXISTS observations (
-                task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
-                observation_json TEXT NOT NULL,
-                signal_level TEXT NOT NULL,
-                requires_manual_review INTEGER NOT NULL,
-                analyzer_version TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS evidence_items (
-                evidence_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                kind TEXT NOT NULL,
-                path_or_url TEXT NOT NULL,
-                sha256 TEXT NOT NULL DEFAULT '',
-                captured_at TEXT NOT NULL,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE IF NOT EXISTS memory_events (
-                event_id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                company_id TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                model TEXT NOT NULL DEFAULT '',
-                query TEXT NOT NULL DEFAULT '',
-                raw_path TEXT NOT NULL DEFAULT '',
-                event_json TEXT NOT NULL,
-                verification_status TEXT NOT NULL,
-                occurred_at TEXT NOT NULL,
-                valid_from TEXT,
-                valid_to TEXT,
-                supersedes_event_id TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_queries_company ON queries(company_id);
-            CREATE INDEX IF NOT EXISTS idx_runs_company ON runs(company_id);
-            CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(run_id, status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_provider ON tasks(provider_id);
-            CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence_items(task_id);
-            CREATE INDEX IF NOT EXISTS idx_memory_company_time
-                ON memory_events(company_id, occurred_at);
-            """
-        )
-        self.connection.execute(
-            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (str(SCHEMA_VERSION),),
-        )
-        self.connection.commit()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for version in pending_versions:
+                MIGRATIONS[version](self.connection)
+                self.connection.execute(
+                    "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(version),),
+                )
+        except Exception:
+            self.connection.rollback()
+            raise
+        else:
+            self.connection.commit()
 
     def upsert_company(self, company: CompanyRecord) -> None:
         self.connection.execute(
