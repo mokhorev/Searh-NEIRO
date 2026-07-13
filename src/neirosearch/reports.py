@@ -9,6 +9,7 @@ from .analyzer import result_record, summarize_results
 from .models import ProviderResult
 
 EXCEL_DELIMITER = ";"
+EXCEL_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def ensure_output_dir(path: str | Path) -> Path:
@@ -17,15 +18,31 @@ def ensure_output_dir(path: str | Path) -> Path:
     return output_dir
 
 
-def write_jsonl(results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]) -> Path:
+def excel_safe_text(value: object) -> str:
+    """Prevent CSV/Excel formula execution while preserving visible text."""
+    if value is None:
+        return ""
+    text = str(value)
+    candidate = text.lstrip(" \t\r\n")
+    if candidate.startswith(EXCEL_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
+def write_jsonl(
+    results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]
+) -> Path:
     path = output_dir / "results.jsonl"
     with path.open("w", encoding="utf-8") as fh:
         for result in results:
-            fh.write(json.dumps(result_record(result, brand, competitors), ensure_ascii=False) + "\n")
+            record = result_record(result, brand, competitors)
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     return path
 
 
-def write_csv(results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]) -> Path:
+def write_csv(
+    results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]
+) -> Path:
     path = output_dir / "summary.csv"
     fieldnames = [
         "provider_id",
@@ -52,27 +69,31 @@ def write_csv(results: list[ProviderResult], output_dir: Path, brand: str, compe
             analysis: dict[str, Any] | None = record.get("analysis")
             writer.writerow(
                 {
-                    "provider_id": result.provider_id,
-                    "provider_label": result.provider_label,
-                    "model": result.model,
+                    "provider_id": excel_safe_text(result.provider_id),
+                    "provider_label": excel_safe_text(result.provider_label),
+                    "model": excel_safe_text(result.model),
                     "ok": result.ok,
                     "brand_found": analysis.get("brand_found") if analysis else "",
                     "brand_in_prompt": record.get("brand_in_prompt", ""),
                     "organic_brand_found": record.get("organic_brand_found", ""),
                     "brand_position": analysis.get("brand_position") if analysis else "",
-                    "role": analysis.get("role") if analysis else "",
-                    "competitors_found": ", ".join(analysis.get("competitors_found", [])) if analysis else "",
+                    "role": excel_safe_text(analysis.get("role")) if analysis else "",
+                    "competitors_found": excel_safe_text(
+                        ", ".join(analysis.get("competitors_found", [])) if analysis else ""
+                    ),
                     "latency_ms": result.latency_ms,
-                    "error": result.error or "",
-                    "prompt": result.prompt,
-                    "answer": record.get("answer", ""),
-                    "citations": ", ".join(result.citations),
+                    "error": excel_safe_text(result.error or ""),
+                    "prompt": excel_safe_text(result.prompt),
+                    "answer": excel_safe_text(record.get("answer", "")),
+                    "citations": excel_safe_text(", ".join(result.citations)),
                 }
             )
     return path
 
 
-def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]) -> Path:
+def write_markdown(
+    results: list[ProviderResult], output_dir: Path, brand: str, competitors: list[str]
+) -> Path:
     path = output_dir / "report.md"
     summary = summarize_results(results, brand, competitors)
     lines = [
@@ -81,7 +102,8 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
         f"- Total answers: {summary['total_results']}",
         f"- Successful answers: {summary['ok_results']}",
         f"- Brand found: {summary['brand_found']}",
-        f"- Brand found organically: {summary['organic_brand_found']} / {summary['organic_results']}",
+        f"- Brand found organically: {summary['organic_brand_found']} / "
+        f"{summary['organic_results']}",
         f"- Brand recommended: {summary['brand_recommended']}",
         f"- Visibility rate: {summary['visibility_rate']}",
         f"- Organic visibility rate: {summary['organic_visibility_rate']}",
@@ -112,7 +134,8 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
                     f"**Organic brand found:** {record['organic_brand_found']}",
                     f"**Brand position:** {analysis['brand_position']}",
                     f"**Role:** {analysis['role']}",
-                    f"**Competitors found:** {', '.join(analysis['competitors_found']) or '-'}",
+                    f"**Competitors found:** "
+                    f"{', '.join(analysis['competitors_found']) or '-'}",
                 ]
             )
         if result.citations:
@@ -122,7 +145,9 @@ def write_markdown(results: list[ProviderResult], output_dir: Path, brand: str, 
     return path
 
 
-def write_all_reports(results: list[ProviderResult], output_dir: str | Path, brand: str, competitors: list[str]) -> list[Path]:
+def write_all_reports(
+    results: list[ProviderResult], output_dir: str | Path, brand: str, competitors: list[str]
+) -> list[Path]:
     out = ensure_output_dir(output_dir)
     return [
         write_jsonl(results, out, brand, competitors),
