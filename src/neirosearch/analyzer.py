@@ -405,8 +405,7 @@ def extract_possible_company_names(answer: str, brand: str = "", limit: int = 15
     # Context phrases: клиника X, стоматология Y, центр Z. Keep the context word because
     # "Сибирская" alone is weaker than "Клиника Сибирская".
     context_pattern = re.compile(
-        r"\b((?:клиника|стоматология|медцентр|медицинский центр|центр|салон|студия|академия|школа|сеть|компания|clinic|studio|academy|school|center|group)\s+[«\"]?[А-ЯA-ZЁ][А-ЯA-ZЁа-яa-zё0-9\-&\s]{2,60}[»\"]?)",
-        re.IGNORECASE,
+        r"\b((?i:клиника|стоматология|медцентр|медицинский центр|центр|салон|студия|академия|школа|сеть|компания|clinic|studio|academy|school|center|group)\s+[«\"]?[А-ЯA-ZЁ][А-ЯA-ZЁа-яa-zё0-9\-&\s]{2,60}[»\"]?)"
     )
     for match in context_pattern.findall(answer):
         _append_candidate(candidates, match)

@@ -106,6 +106,32 @@ class CandidateExtractionTests(unittest.TestCase):
         self.assertNotIn("сеть салонов", candidates)
         self.assertNotIn("сеть в Красноярске", candidates)
 
+    def test_depth_answer_descriptions_are_not_company_candidates(self) -> None:
+        answer = (
+            "Color Bar — профильная студия окрашивания волос, всплывает по запросам.\n"
+            "Fenixhair — специализируется на современных техниках.\n"
+            "Art Color Bar — заметна как студия со сложным окрашиванием.\n"
+            "MANACO — всплывает как салон с отдельными колористами.\n"
+            "VIVALDI — находится по прямым запросам AirTouch.\n"
+            "Бархатный сезон — крупный местный бренд.\n"
+            "ReForme — всплывает в социальных сетях."
+        )
+
+        candidates = extract_possible_company_names(answer, brand="В отражении")
+
+        self.assertEqual(
+            candidates,
+            [
+                "Color Bar",
+                "Fenixhair",
+                "Art Color Bar",
+                "MANACO",
+                "VIVALDI",
+                "Бархатный сезон",
+                "ReForme",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
