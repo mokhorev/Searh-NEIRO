@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -160,7 +161,10 @@ PROVIDER_SEND_SELECTORS = {
 }
 
 ANSWER_SELECTORS = {
-    "chatgpt_web": ["div[data-message-author-role='assistant']", "article"],
+    "chatgpt_web": [
+        "div[data-message-author-role='assistant']",
+        "article div[data-message-author-role='assistant']",
+    ],
     "perplexity_web": ["[data-testid='answer']", "main article", ".prose", "main"],
     "deepseek_web": [".ds-markdown", ".markdown", "main"],
     "qwen_web": [".markdown", ".prose", "main"],
@@ -183,7 +187,18 @@ INCOMPLETE_MARKERS = [
     "ответ формируется",
     "continue generating",
     "продолжить генерацию",
+    "остановить ответ",
+    "stop generating",
 ]
+
+ACTIVE_GENERATION_SELECTORS = {
+    "chatgpt_web": [
+        "button[data-testid='stop-button']",
+        "button[aria-label*='Stop']",
+        "button[aria-label*='Остановить']",
+        "button:has-text('Остановить ответ')",
+    ],
+}
 
 
 @dataclass(slots=True)
@@ -422,7 +437,7 @@ def submit_prompt(page: Any, prompt: str, provider_id: str = "") -> bool:
 
 
 def extract_answer(page: Any, provider_id: str) -> str:
-    selectors = ANSWER_SELECTORS.get(provider_id, []) + ["main", "body"]
+    selectors = ANSWER_SELECTORS.get(provider_id, ["main"])
     for selector in selectors:
         try:
             locator = page.locator(selector)
@@ -446,9 +461,31 @@ def looks_incomplete(text: str) -> bool:
     return len(value) < 120 and "\n" not in value
 
 
+def looks_like_prompt_echo(text: str, prompt: str) -> bool:
+    answer_value = re.sub(r"\s+", " ", str(text)).casefold().strip()
+    prompt_value = re.sub(r"\s+", " ", str(prompt)).casefold().strip()
+    if len(prompt_value) < 80 or not answer_value:
+        return False
+    comparison = prompt_value[: min(len(prompt_value), 240)]
+    return answer_value.startswith(comparison)
+
+
+def generation_in_progress(page: Any, provider_id: str) -> bool:
+    for selector in ACTIVE_GENERATION_SELECTORS.get(provider_id, []):
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+            if count > 0 and locator.nth(count - 1).is_visible(timeout=1000):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def wait_for_answer(
     page: Any,
     provider_id: str,
+    prompt: str = "",
     timeout_sec: int = 240,
     min_answer_chars: int = 300,
     stable_rounds_required: int = 8,
@@ -467,10 +504,24 @@ def wait_for_answer(
 
         enough_text = len(last_text.strip()) >= min_answer_chars
         stable_enough = stable_rounds >= stable_rounds_required
-        if last_text and enough_text and stable_enough and not looks_incomplete(last_text):
+        valid_answer = (
+            last_text
+            and enough_text
+            and not looks_incomplete(last_text)
+            and not looks_like_prompt_echo(last_text, prompt)
+            and not generation_in_progress(page, provider_id)
+        )
+        if valid_answer and stable_enough:
             return last_text
         time.sleep(2)
-    return last_text
+    if (
+        len(last_text.strip()) >= min_answer_chars
+        and not looks_incomplete(last_text)
+        and not looks_like_prompt_echo(last_text, prompt)
+        and not generation_in_progress(page, provider_id)
+    ):
+        return last_text
+    return ""
 
 
 def _mark_task_started(df: pd.DataFrame, idx: int, run_id: str) -> None:
@@ -560,7 +611,12 @@ def run_pending_tasks(
                     result.add(f"{label}: {message}. Проверь вход и селекторы, затем заполни вручную в очереди.")
                     continue
                 result.add(f"{label}: промпт отправлен, жду полный ответ до {answer_timeout_sec} сек.")
-                answer = wait_for_answer(page, provider_id, timeout_sec=answer_timeout_sec)
+                answer = wait_for_answer(
+                    page,
+                    provider_id,
+                    prompt=prompt,
+                    timeout_sec=answer_timeout_sec,
+                )
                 if answer:
                     _mark_task_ok(df, idx, answer, started_at, run_id)
                     save_tasks(df, tasks_path)
