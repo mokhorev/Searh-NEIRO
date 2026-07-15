@@ -23,6 +23,17 @@ try:
         open_login_pages,
         run_pending_tasks,
     )
+    from .depth_scan import (
+        build_depth_prompt,
+        build_depth_task_rows,
+        collect_known_candidates,
+        depth_answer_rows,
+        depth_label,
+        depth_tasks,
+        depth_wave_summary,
+        first_brand_depth,
+        max_depth_iteration,
+    )
     from .manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from .models import ProviderResult
     from .openserp import (
@@ -52,6 +63,17 @@ except ImportError:
         PROVIDER_URLS as BROWSER_PROVIDER_URLS,
         open_login_pages,
         run_pending_tasks,
+    )
+    from neirosearch.depth_scan import (
+        build_depth_prompt,
+        build_depth_task_rows,
+        collect_known_candidates,
+        depth_answer_rows,
+        depth_label,
+        depth_tasks,
+        depth_wave_summary,
+        first_brand_depth,
+        max_depth_iteration,
     )
     from neirosearch.manual import MANUAL_PROVIDERS, TASK_FIELDNAMES
     from neirosearch.models import ProviderResult
@@ -222,14 +244,25 @@ def build_tasks(companies: pd.DataFrame, prompts: list[str], providers: list[str
 
 
 def load_tasks() -> pd.DataFrame:
-    return read_csv_any(TASKS_PATH, TASK_FIELDNAMES)
+    if not TASKS_PATH.exists():
+        return pd.DataFrame(columns=TASK_FIELDNAMES)
+    try:
+        tasks = pd.read_csv(TASKS_PATH, sep=None, engine="python", encoding="utf-8-sig")
+    except Exception:
+        return pd.DataFrame(columns=TASK_FIELDNAMES)
+    for col in TASK_FIELDNAMES:
+        if col not in tasks.columns:
+            tasks[col] = ""
+    extra_columns = [col for col in tasks.columns if col not in TASK_FIELDNAMES]
+    return tasks[TASK_FIELDNAMES + extra_columns].fillna("")
 
 
 def save_tasks(df: pd.DataFrame) -> None:
     for col in TASK_FIELDNAMES:
         if col not in df.columns:
             df[col] = ""
-    write_csv(df[TASK_FIELDNAMES].fillna(""), TASKS_PATH)
+    extra_columns = [col for col in df.columns if col not in TASK_FIELDNAMES]
+    write_csv(df[TASK_FIELDNAMES + extra_columns].fillna(""), TASKS_PATH)
 
 
 def task_progress(tasks: pd.DataFrame) -> tuple[int, int, int]:
@@ -344,6 +377,175 @@ def page_search() -> None:
         st.success(f"Поиск создан: {len(new_tasks)} запросов для компании «{brand}».")
         st.session_state["page"] = "Автокомбайн"
         st.rerun()
+
+
+def page_depth_scan() -> None:
+    st.header("Глубина рынка")
+    st.caption(
+        "Нейтральный итерационный поиск без названия клиента в промпте. "
+        "Каждый следующий проход исключает кандидатов из предыдущих ответов."
+    )
+
+    companies = load_companies()
+    if companies.empty:
+        st.warning("Сначала добавь компанию в разделе «Компании».")
+        return
+
+    brand = st.selectbox("Компания", companies["brand"].astype(str).tolist(), key="depth_company")
+    company = selected_company_frame(companies, brand)
+    if company.empty:
+        st.warning("Компания не найдена.")
+        return
+    company_record = company.iloc[0].to_dict()
+    st.info(
+        f"Ниша: {company_record.get('industry', '')} · "
+        f"Регион: {company_record.get('region', '')}"
+    )
+    st.warning(
+        "Название клиента не вставляется в DEPTH-промпты. "
+        "Это позволяет измерять самостоятельное появление бренда."
+    )
+
+    default_depth_providers = [
+        pid for pid in load_provider_ids() if pid in BROWSER_PROVIDERS
+    ]
+    providers = provider_multiselect(
+        default_depth_providers,
+        key="depth_providers",
+        only_browser=True,
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        max_iterations = st.number_input(
+            "Максимум проходов",
+            min_value=1,
+            max_value=5,
+            value=3,
+            step=1,
+            key="depth_max_iterations",
+        )
+    with col2:
+        candidate_limit = st.number_input(
+            "Кандидатов за проход",
+            min_value=3,
+            max_value=15,
+            value=7,
+            step=1,
+            key="depth_candidate_limit",
+        )
+
+    tasks = load_tasks()
+    company_depth_tasks = depth_tasks(tasks, brand=brand)
+    current_iteration = max_depth_iteration(tasks, brand)
+    first_depth = first_brand_depth(tasks, brand)
+    wave_summary = depth_wave_summary(tasks, brand)
+    current_wave = (
+        company_depth_tasks[company_depth_tasks["depth_iter"] == current_iteration]
+        if current_iteration
+        else pd.DataFrame()
+    )
+    current_wave_answered = int(
+        current_wave["answer"].fillna("").astype(str).str.strip().ne("").sum()
+    ) if not current_wave.empty else 0
+    current_wave_complete = bool(
+        not current_wave.empty and current_wave_answered == len(current_wave)
+    )
+
+    metric1, metric2, metric3 = st.columns(3)
+    metric1.metric("Текущий проход", current_iteration or "не создан")
+    metric2.metric("DEPTH-задач", len(company_depth_tasks))
+    metric3.metric("Ответов", int(company_depth_tasks["answer"].fillna("").astype(str).str.strip().ne("").sum()) if not company_depth_tasks.empty else 0)
+
+    if first_depth is not None:
+        st.success(depth_label(first_depth, max_iterations=int(max_iterations)))
+    elif current_iteration:
+        if current_iteration >= int(max_iterations):
+            st.info(depth_label(None, max_iterations=int(max_iterations)))
+        else:
+            st.info(
+                f"Клиент пока не найден. Завершено {current_iteration} "
+                f"из {int(max_iterations)} проходов."
+            )
+
+    if current_iteration == 0:
+        if st.button("Создать первый проход", type="primary"):
+            if not providers:
+                st.error("Выбери хотя бы одну нейросеть.")
+                return
+            new_tasks = build_depth_task_rows(
+                company_record,
+                providers=providers,
+                provider_labels=PROVIDER_LABELS,
+                iteration=1,
+                candidate_limit=int(candidate_limit),
+            )
+            save_tasks(pd.concat([tasks, new_tasks], ignore_index=True))
+            st.success(f"Первый проход создан: {len(new_tasks)} задач.")
+            st.rerun()
+    elif current_iteration < int(max_iterations):
+        if not current_wave_complete:
+            st.info(
+                f"Проход {current_iteration} ещё не завершён: "
+                f"готово {current_wave_answered} из {len(current_wave)} задач. "
+                "Сначала выполни его в разделе «Автокомбайн»."
+            )
+        known_candidates = collect_known_candidates(
+            tasks,
+            brand=brand,
+            through_iteration=current_iteration,
+        )
+        next_iteration = current_iteration + 1
+        with st.expander("Предпросмотр следующего промпта", expanded=False):
+            st.code(
+                build_depth_prompt(
+                    industry=str(company_record.get("industry", "")),
+                    region=str(company_record.get("region", "")),
+                    iteration=next_iteration,
+                    candidate_limit=int(candidate_limit),
+                    known_candidates=known_candidates,
+                ),
+                language="text",
+            )
+        if st.button(
+            f"Создать проход {next_iteration}",
+            type="primary",
+            disabled=not current_wave_complete,
+        ):
+            if not providers:
+                st.error("Выбери хотя бы одну нейросеть.")
+                return
+            new_tasks = build_depth_task_rows(
+                company_record,
+                providers=providers,
+                provider_labels=PROVIDER_LABELS,
+                iteration=next_iteration,
+                candidate_limit=int(candidate_limit),
+                known_candidates=known_candidates,
+            )
+            save_tasks(pd.concat([tasks, new_tasks], ignore_index=True))
+            st.success(f"Проход {next_iteration} создан: {len(new_tasks)} задач.")
+            st.rerun()
+    else:
+        st.info(f"Достигнут лимит в {max_iterations} прохода(ов).")
+
+    if not wave_summary.empty:
+        st.subheader("Итоги по проходам")
+        st.dataframe(wave_summary, hide_index=True, use_container_width=True)
+
+    known_candidates = collect_known_candidates(tasks, brand=brand)
+    if known_candidates:
+        st.subheader("Кандидаты, найденные в DEPTH-ответах")
+        st.write(", ".join(known_candidates))
+
+    if not company_depth_tasks.empty:
+        st.subheader("Ответы DEPTH_SCAN")
+        st.dataframe(
+            depth_answer_rows(tasks, brand=brand),
+            hide_index=True,
+            height=420,
+            use_container_width=True,
+        )
+    st.caption(f"Очередь: {TASKS_PATH.resolve()}")
 
 
 def page_companies() -> None:
@@ -808,6 +1010,7 @@ def render_app() -> None:
         "Промпты",
         "Нейросети",
         "Автокомбайн",
+        "Глубина рынка",
         "Очередь",
         "По компаниям",
         "Источники / Поиск",
@@ -839,6 +1042,8 @@ def render_app() -> None:
         page_providers()
     elif page == "Автокомбайн":
         page_browser()
+    elif page == "Глубина рынка":
+        page_depth_scan()
     elif page == "Очередь":
         page_queue()
     elif page == "По компаниям":
