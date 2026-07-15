@@ -390,6 +390,20 @@ def extract_possible_company_names(answer: str, brand: str = "", limit: int = 15
 
     candidates: list[str] = []
 
+    # Preserve the answer's recommendation order before looking for secondary mentions.
+    for line in answer.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        looks_like_list = bool(re.match(r"^\s*(?:[-–—•*]|\d+[.)])\s+", line))
+        has_markdown_bold = bool(re.match(r"^\s*[-–—•*]?\s*\*\*[^*]{3,80}\*\*", line))
+        has_named_head = bool(re.match(r"^.{3,80}\s+[—–-]\s+\S+", line))
+        if not (looks_like_list or has_markdown_bold or has_named_head):
+            continue
+        head = _line_head_candidate(line)
+        if 3 <= len(head) <= 80:
+            _append_candidate(candidates, head)
+
     # Quoted names: «Клиника Сибирская», "Sigma Academy".
     for match in re.findall(r"[«\"]([^«»\"\n]{3,80})[»\"]", answer):
         _append_candidate(candidates, match)
@@ -409,20 +423,6 @@ def extract_possible_company_names(answer: str, brand: str = "", limit: int = 15
     )
     for match in context_pattern.findall(answer):
         _append_candidate(candidates, match)
-
-    # List items and plain "Name — description" lines are common in web answers.
-    for line in answer.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        looks_like_list = bool(re.match(r"^\s*(?:[-–—•*]|\d+[.)])\s+", line))
-        has_markdown_bold = bool(re.match(r"^\s*[-–—•*]?\s*\*\*[^*]{3,80}\*\*", line))
-        has_named_head = bool(re.match(r"^.{3,80}\s+[—–-]\s+\S+", line))
-        if not (looks_like_list or has_markdown_bold or has_named_head):
-            continue
-        head = _line_head_candidate(line)
-        if 3 <= len(head) <= 80:
-            _append_candidate(candidates, head)
 
     # Capitalized compact names. This is intentionally last and filtered hard.
     capitalized_pattern = re.compile(

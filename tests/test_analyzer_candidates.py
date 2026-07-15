@@ -132,6 +132,18 @@ class CandidateExtractionTests(unittest.TestCase):
             ],
         )
 
+    def test_depth_candidates_keep_answer_order_before_quoted_source_mentions(self) -> None:
+        answer = (
+            "Beauty Core — заметная студия сложного окрашивания.\n"
+            "Dialen — берётся за сложные случаи.\n"
+            "Saxap — находится по отдельным запросам AirTouch.\n"
+            "«Saxap» — салон красоты"
+        )
+
+        candidates = extract_possible_company_names(answer, brand="В отражении")
+
+        self.assertEqual(candidates, ["Beauty Core", "Dialen", "Saxap"])
+
 
 if __name__ == "__main__":
     unittest.main()
