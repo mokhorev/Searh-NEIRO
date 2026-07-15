@@ -6,10 +6,31 @@ from pathlib import Path
 
 import pandas as pd
 
-from neirosearch.browser.combinator import pending_task_diagnostics, pending_task_indexes
+from neirosearch.browser.combinator import (
+    looks_incomplete,
+    looks_like_prompt_echo,
+    pending_task_diagnostics,
+    pending_task_indexes,
+)
 
 
 class BrowserQueueTests(unittest.TestCase):
+    def test_chatgpt_prompt_echo_is_not_an_answer(self) -> None:
+        prompt = (
+            "Продолжи поиск глубже по тому же рынку. "
+            "Эти компании уже рассматривались и их нельзя повторять."
+        )
+        captured_page_text = prompt + "\nРазвернуть\nОстановить ответ"
+
+        self.assertTrue(looks_like_prompt_echo(captured_page_text, prompt))
+        self.assertTrue(looks_incomplete(captured_page_text))
+
+    def test_regular_answer_is_not_prompt_echo(self) -> None:
+        prompt = "Назови семь конкретных компаний для сложного окрашивания в Красноярске."
+        answer = "Альфа — локальная студия с сильным портфолио сложных окрашиваний."
+
+        self.assertFalse(looks_like_prompt_echo(answer, prompt))
+
     def test_only_pending_and_retry_tasks_are_runnable(self) -> None:
         tasks = pd.DataFrame(
             [
