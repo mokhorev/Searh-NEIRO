@@ -85,6 +85,27 @@ class CandidateExtractionTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
 
+    def test_depth_answer_line_heads_keep_complete_brand_names(self) -> None:
+        answer = (
+            "Mod`s Hair — известный международный бренд.\n"
+            "SOCO — заметная сеть салонов.\n"
+            "V.Way — специализируется на сложных окрашиваниях.\n"
+            "17/07 — салон с выраженным позиционированием.\n"
+            "Hair City — крупная сеть в Красноярске."
+        )
+
+        candidates = extract_possible_company_names(answer, brand="В отражении")
+
+        self.assertIn("Mod's Hair", candidates)
+        self.assertIn("SOCO", candidates)
+        self.assertIn("V.Way", candidates)
+        self.assertIn("17/07", candidates)
+        self.assertIn("Hair City", candidates)
+        self.assertNotIn("Mod", candidates)
+        self.assertNotIn("Way", candidates)
+        self.assertNotIn("сеть салонов", candidates)
+        self.assertNotIn("сеть в Красноярске", candidates)
+
 
 if __name__ == "__main__":
     unittest.main()
