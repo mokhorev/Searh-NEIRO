@@ -96,6 +96,7 @@ GENERIC_COMPANY_PHRASES = {
     "студия красоты",
     "центр красоты",
     "клиника красоты",
+    "сеть салонов",
     "beauty salon",
     "hair salon",
 }
@@ -273,8 +274,9 @@ def classify_role(answer: str, brand: str, brand_found: bool, position: int | No
 
 def clean_candidate(value: str) -> str:
     value = str(value).replace("\u00a0", " ")
-    value = re.sub(r"^[\s\-–—•*#>\d.)]+", "", value.strip())
-    value = re.sub(r"[*_`]+", "", value)
+    value = re.sub(r"^\s*(?:[\-–—•*#>]\s+|\d+[.)]\s+)", "", value.strip())
+    value = value.replace("`", "'")
+    value = re.sub(r"[*_]+", "", value)
     value = re.sub(r"\s*\([^)]{0,80}\)\s*$", "", value)
     value = re.split(r"\s+[—–-]\s+|:\s+|\s+\|\s+", value, maxsplit=1)[0]
     value = re.sub(r"[\s,;:.!?]+$", "", value)
@@ -312,12 +314,17 @@ def is_reasonable_company_candidate(value: str, brand: str = "") -> bool:
     candidate = clean_candidate(value)
     if len(candidate) < 3 or len(candidate) > 80:
         return False
-    if not _has_letter(candidate):
+    numeric_brand = bool(re.fullmatch(r"\d{1,3}/\d{1,3}", candidate))
+    if not _has_letter(candidate) and not numeric_brand:
         return False
     normalized = normalize_text(candidate)
     if not normalized or normalized in STOP_COMPANY_CANDIDATES:
         return False
+    if sum(word in STOP_COMPANY_CANDIDATES for word in normalized.split()) >= 2:
+        return False
     if normalized in GENERIC_COMPANY_PHRASES:
+        return False
+    if normalized.startswith("сеть в "):
         return False
     if re.fullmatch(r"(?:салон|студия|центр|клиника) красоты(?: \d+)?", normalized):
         return False
@@ -331,8 +338,10 @@ def is_reasonable_company_candidate(value: str, brand: str = "") -> bool:
         brand_normalized = normalize_text(brand)
         if re.search(rf"(?:^|\s){re.escape(brand_normalized)}(?:$|\s)", normalized):
             return False
-    if re.fullmatch(r"[\d\W_]+", candidate):
+    if re.fullmatch(r"[\d\W_]+", candidate) and not numeric_brand:
         return False
+    if numeric_brand:
+        return True
     words = normalized.split()
     if len(words) > 6:
         return False
@@ -361,7 +370,7 @@ def _append_candidate(candidates: list[str], raw: str) -> None:
 
 def _line_head_candidate(line: str) -> str:
     line = line.strip()
-    line = re.sub(r"^[\-–—•*#>\d.)\s]+", "", line)
+    line = re.sub(r"^\s*(?:[\-–—•*#>]\s+|\d+[.)]\s+)", "", line)
     # Markdown list item can be "**Название** — описание".
     bold = re.match(r"\*\*([^*\n]{3,80})\*\*", line)
     if bold:
@@ -402,14 +411,15 @@ def extract_possible_company_names(answer: str, brand: str = "", limit: int = 15
     for match in context_pattern.findall(answer):
         _append_candidate(candidates, match)
 
-    # Bullet/numbered list starts: "1. Cosmodent — ...", "- Альфа: ...".
+    # List items and plain "Name — description" lines are common in web answers.
     for line in answer.splitlines():
         line = line.strip()
         if not line:
             continue
         looks_like_list = bool(re.match(r"^\s*(?:[-–—•*]|\d+[.)])\s+", line))
         has_markdown_bold = bool(re.match(r"^\s*[-–—•*]?\s*\*\*[^*]{3,80}\*\*", line))
-        if not (looks_like_list or has_markdown_bold):
+        has_named_head = bool(re.match(r"^.{3,80}\s+[—–-]\s+\S+", line))
+        if not (looks_like_list or has_markdown_bold or has_named_head):
             continue
         head = _line_head_candidate(line)
         if 3 <= len(head) <= 80:
@@ -438,6 +448,8 @@ def extract_possible_company_names(answer: str, brand: str = "", limit: int = 15
             existing_index = seen[key]
             if len(candidate) > len(result[existing_index]):
                 result[existing_index] = candidate
+            continue
+        if len(key.split()) == 1 and any(key in existing.split() for existing in seen):
             continue
         seen[key] = len(result)
         result.append(candidate)
